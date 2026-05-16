@@ -81,10 +81,29 @@ type VM struct {
 
 ## Acceptance criteria
 
-- [ ] `config.Load(path)` reads and parses `hosts.yaml`
-- [ ] Missing file returns a clear error
-- [ ] `DEPLOY_DIR` env var support: prefer `$DEPLOY_DIR/hosts.yaml`, fall back to project root
-- [ ] SSH key resolution cascade: VM ssh_key → parent host ssh_key → global ssh_key → `~/.ssh/id_ed25519`
-- [ ] `isProxmox(host)` and `getVM(host, vmName)` helpers
-- [ ] Service name validation helper
-- [ ] `hosts.example.yaml` copied from Python version
+- [x] `config.Load(path)` reads and parses `hosts.yaml`
+- [x] Missing file returns a clear error
+- [x] `DEPLOY_DIR` env var support: prefer `$DEPLOY_DIR/hosts.yaml`, fall back to project root
+- [x] SSH key resolution cascade: VM ssh_key → parent host ssh_key → global ssh_key → `~/.ssh/id_ed25519`
+- [x] `IsProxmox(host)` and `GetVM(host, vmName)` helpers
+- [x] Service name validation helper
+- [x] `hosts.example.yaml` copied from Python version
+
+## Unit tests
+
+| Test | Coverage |
+|------|----------|
+| `TestLoad_ValidConfig` | config parsing, standard hosts |
+| `TestLoad_ProxmoxHostWithVMs` | Proxmox host + VM parsing |
+| `TestLoad_NoHosts` | error on empty hosts list |
+| `TestLoad_MissingFile` | error on missing file |
+| `TestGetVM` | VM lookup, non-proxmox fallback |
+| `TestGetHost` | host lookup by name |
+| `TestResolveSSHKey_Cascade` | host key → global key → default |
+| `TestResolveVMSSHKey_Cascade` | vm key → host key → global key → default |
+| `TestValidateService` | service validation on host |
+| `TestValidateVMService` | service validation on VM |
+| `TestIsProxmox` | case-insensitive type check |
+| `TestExpandTilde` | home dir expansion |
+
+**Total**: 12 tests, **94.7% coverage**
