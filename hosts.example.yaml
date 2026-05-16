@@ -1,0 +1,55 @@
+# Copy this file to hosts.yaml and fill in your hosts.
+# hosts.yaml is gitignored.
+
+# Optional: default SSH identity file used for all remote hosts.
+# Override per-host with ssh_key: on individual host entries.
+# Defaults to ~/.ssh/id_ed25519 if not set.
+# ssh_key: ~/.ssh/id_rsa
+
+# Optional: NordVPN access token for headless VPN repair.
+# Generate at: https://my.nordaccount.com/dashboard/nordvpn/access-tokens/
+# nordvpn_token: "your-access-token-here"
+
+hosts:
+  # Use local: true for the machine running lanctl itself.
+  # Commands run via subprocess — no SSH key needed.
+  - name: self
+    ip: 192.168.0.236       # used only for display
+    mac: "AA:BB:CC:DD:EE:FF"
+    local: true
+    services:
+      - lanctl-backend
+
+  - name: desktop
+    ip: 192.168.0.100
+    mac: "AA:BB:CC:DD:EE:FF"
+    ssh_user: tom
+    # ssh_key: ~/.ssh/id_ed25519     # optional, defaults to ~/.ssh/id_ed25519
+    # broadcast: 255.255.255.255     # optional, for directed broadcast (e.g. 192.168.0.255)
+    # nordvpn_hostname: desktop.nord # optional — NordVPN meshnet hostname for VPN reachability check
+    services:                        # optional — systemd services to monitor
+      - nginx
+      - docker
+
+  # Proxmox hypervisor — ip/mac/ssh_user refer to the physical machine.
+  # VMs running on it are listed under vms:.
+  # WoL and shutdown target the Proxmox host; services and SSH target each VM.
+  - name: nas
+    type: proxmox
+    ip: 192.168.0.10             # Proxmox host IP (physical machine)
+    mac: "11:22:33:44:55:66"    # physical NIC MAC address (for WoL)
+    ssh_user: root               # Proxmox host SSH user
+    # ssh_key: ~/.ssh/id_ed25519
+    # broadcast: 192.168.0.255
+    # nordvpn_hostname: nas-pve.nord
+    vms:
+      - name: nas-main
+        vmid: 100                # VM ID — reserved for future Proxmox API use
+        ip: 192.168.0.200        # VM IP (for SSH, services, online check)
+        ssh_user: tom
+        # local: true            # set if this VM IS the machine running lanctl (skips SSH)
+        # ssh_key: ~/.ssh/id_ed25519  # optional, falls back to host ssh_key then global default
+        # nordvpn_hostname: nas-main.nord
+        services:
+          - lanctl-backend.service
+          - myapp-backend.service

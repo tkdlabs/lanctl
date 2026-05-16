@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>lanctl</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+      padding: 2rem;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      color: #94a3b8;
+      margin-bottom: 1.5rem;
+    }
+
+    #status-bar {
+      font-size: 0.75rem;
+      color: #475569;
+      margin-bottom: 1rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      max-width: 960px;
+    }
+
+    th {
+      text-align: left;
+      font-size: 0.7rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #475569;
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid #1e293b;
+    }
+
+    td {
+      padding: 0.75rem;
+      border-bottom: 1px solid #1e293b;
+      font-size: 0.9rem;
+      vertical-align: middle;
+    }
+
+    tr:last-child td { border-bottom: none; }
+
+    .dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 0.4rem;
+      vertical-align: middle;
+    }
+    .dot.online  { background: #22c55e; box-shadow: 0 0 6px #22c55e88; }
+    .dot.offline { background: #475569; }
+
+    .vpn-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      margin-top: 0.25rem;
+      font-size: 0.7rem;
+      font-weight: 500;
+      letter-spacing: 0.03em;
+    }
+    .vpn-badge .dot { width: 7px; height: 7px; margin-right: 0; }
+    .vpn-badge.vpn-ok    { color: #4ade80; }
+    .vpn-badge.vpn-down  { color: #f87171; }
+
+    .proxmox-badge {
+      display: inline-block;
+      padding: 0.1rem 0.4rem;
+      background: #0c1a2e;
+      color: #38bdf8;
+      border: 1px solid #1e4163;
+      border-radius: 4px;
+      font-size: 0.65rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      vertical-align: middle;
+      margin-left: 0.4rem;
+    }
+
+    .vm-row td {
+      background: #0c1119;
+      border-bottom: 1px solid #161f2e;
+    }
+    .vm-row td:first-child { padding-left: 1.75rem; border-left: 2px solid #1e3a5f; }
+
+    .label { font-weight: 500; }
+    .meta  { font-size: 0.75rem; color: #64748b; margin-top: 0.15rem; }
+    .vm-label { font-weight: 500; font-size: 0.85rem; color: #94a3b8; }
+
+    .services { display: flex; flex-direction: column; gap: 0.35rem; }
+
+    .svc-entry {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .svc-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .svc-dot.active       { background: #22c55e; box-shadow: 0 0 4px #22c55e88; }
+    .svc-dot.inactive     { background: #475569; }
+    .svc-dot.failed       { background: #ef4444; box-shadow: 0 0 4px #ef444488; }
+    .svc-dot.transitioning { background: #eab308; }
+    .svc-dot.unknown      { background: #1e293b; border: 1px solid #334155; }
+
+    .svc-link {
+      display: inline-block;
+      padding: 0.2rem 0.5rem;
+      background: #1e293b;
+      color: #94a3b8;
+      border: 1px solid #334155;
+      border-radius: 5px;
+      font-size: 0.75rem;
+      font-weight: 500;
+      text-decoration: none;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .svc-link:hover { color: #38bdf8; border-color: #38bdf8; }
+
+    .svc-controls { display: flex; gap: 0.25rem; }
+
+    .btn-svc {
+      padding: 0.15rem 0.4rem;
+      border: 1px solid #334155;
+      background: transparent;
+      color: #64748b;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s, background 0.15s;
+      line-height: 1.4;
+    }
+    .btn-svc:hover:not(:disabled) { color: #e2e8f0; border-color: #64748b; background: #1e293b; }
+    .btn-svc:disabled { opacity: 0.25; cursor: not-allowed; }
+
+    .actions { display: flex; gap: 0.5rem; }
+
+    button {
+      padding: 0.35rem 0.85rem;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    .btn-wake     { background: #1d4ed8; color: #fff; }
+    .btn-shutdown { background: #7f1d1d; color: #fca5a5; }
+    .btn-vpnfix   { background: #78350f; color: #fcd34d; }
+
+    .repair-row td {
+      padding: 0;
+      border-bottom: 1px solid #1e293b;
+    }
+    .repair-panel {
+      background: #0a0e18;
+      border-top: 1px solid #1e293b;
+      padding: 0.75rem 1rem;
+      font-family: ui-monospace, monospace;
+      font-size: 0.75rem;
+      line-height: 1.6;
+      color: #94a3b8;
+      white-space: pre-wrap;
+      max-height: 320px;
+      overflow-y: auto;
+    }
+    .repair-panel .ok   { color: #4ade80; }
+    .repair-panel .fail { color: #f87171; }
+    .repair-panel .sep  { color: #334155; }
+
+    .toast {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 0.6rem 1rem;
+      font-size: 0.85rem;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
+    .toast.ok  { border-color: #22c55e; color: #86efac; }
+    .toast.err { border-color: #ef4444; color: #fca5a5; }
+  </style>
+</head>
+<body>
+  <h1>lanctl</h1>
+  <div id="status-bar">Loading…</div>
+  <table>
+    <thead>
+      <tr>
+        <th>Host</th>
+        <th>Status</th>
+        <th>Services</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="host-table"></tbody>
+  </table>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const POLL_MS = 10_000;
+    let pollTimer = null;
+
+    function esc(str) {
+      return String(str)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    async function fetchHosts() {
+      const res = await fetch('/api/hosts');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    }
+
+    function svcDotClass(status) {
+      if (status === 'active') return 'active';
+      if (status === 'failed') return 'failed';
+      if (status === 'inactive' || status === 'dead') return 'inactive';
+      if (!status || status === 'unknown') return 'unknown';
+      return 'transitioning';
+    }
+
+    function svcShortName(svc) {
+      return svc.replace(/\.service$/, '');
+    }
+
+    // hostName = top-level host name (for API routes)
+    // vmName   = VM name, or null for flat hosts
+    // entity   = the host or VM object (has .online, .services, .service_statuses)
+    function renderServicesHtml(hostName, vmName, entity) {
+      if (!entity.services?.length) return '<span style="color:#1e293b">—</span>';
+      const statuses = entity.service_statuses || {};
+      return entity.services.map(s => {
+        const status = statuses[s] || (entity.online ? 'unknown' : '');
+        const dotCls = entity.online ? svcDotClass(status) : 'unknown';
+        const statusTitle = entity.online ? (status || 'unknown') : 'host offline';
+        const disabled = entity.online ? '' : 'disabled';
+        const logHref = vmName
+          ? `/log?host=${encodeURIComponent(hostName)}&vm=${encodeURIComponent(vmName)}&service=${encodeURIComponent(s)}`
+          : `/log?host=${encodeURIComponent(hostName)}&service=${encodeURIComponent(s)}`;
+        const vmAttr = vmName ? `data-vm="${esc(vmName)}"` : '';
+        return `<div class="svc-entry">
+          <span class="svc-dot ${dotCls}" title="${esc(statusTitle)}"></span>
+          <a class="svc-link" href="${logHref}" target="_blank" rel="noopener">${esc(svcShortName(s))}</a>
+          <div class="svc-controls">
+            <button class="btn-svc" data-host="${esc(hostName)}" ${vmAttr} data-service="${esc(s)}" data-svc-action="start" ${disabled} title="Start">▶</button>
+            <button class="btn-svc" data-host="${esc(hostName)}" ${vmAttr} data-service="${esc(s)}" data-svc-action="stop" ${disabled} title="Stop">■</button>
+            <button class="btn-svc" data-host="${esc(hostName)}" ${vmAttr} data-service="${esc(s)}" data-svc-action="restart" ${disabled} title="Restart">↺</button>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    function renderHosts(hosts) {
+      const tbody = document.getElementById('host-table');
+      tbody.innerHTML = '';
+
+      for (const h of hosts) {
+        const isProxmox = h.type === 'proxmox';
+
+        const vpnHtml = h.vpn_hostname != null
+          ? `<div class="vpn-badge ${h.vpn_reachable ? 'vpn-ok' : 'vpn-down'}">
+               <span class="dot ${h.vpn_reachable ? 'online' : 'offline'}"></span>
+               VPN ${h.vpn_reachable ? 'up' : 'down'} &nbsp;·&nbsp; ${esc(h.vpn_hostname)}
+             </div>`
+          : '';
+
+        const typeBadge = isProxmox ? '<span class="proxmox-badge">proxmox</span>' : '';
+
+        const wakeBtn = h.local ? '' :
+          `<button class="btn-wake" data-name="${esc(h.name)}" data-action="wake"
+            ${h.online ? 'disabled title="Already online"' : ''}>Wake</button>`;
+
+        const fixVpnBtn = (!h.local && h.vpn_hostname && h.online && !h.vpn_reachable)
+          ? `<button class="btn-vpnfix" data-name="${esc(h.name)}" data-action="vpn-repair">Fix VPN</button>`
+          : '';
+
+        const repairId = `repair-${esc(h.name)}`;
+
+        const servicesHtml = isProxmox
+          ? '<span style="color:#1e293b">—</span>'
+          : renderServicesHtml(h.name, null, h);
+
+        const tr = document.createElement('tr');
+        tr.dataset.hostRow = h.name;
+        tr.innerHTML = `
+          <td>
+            <div class="label">${esc(h.name)}${typeBadge}</div>
+            <div class="meta">${esc(h.ip)} &nbsp;·&nbsp; ${esc(h.mac)}</div>
+            ${vpnHtml}
+          </td>
+          <td>
+            <span class="dot ${h.online ? 'online' : 'offline'}"></span>
+            ${h.online ? 'Online' : 'Offline'}
+          </td>
+          <td><div class="services">${servicesHtml}</div></td>
+          <td class="actions">
+            ${wakeBtn}
+            ${fixVpnBtn}
+            <button class="btn-shutdown" data-name="${esc(h.name)}" data-action="shutdown"
+              data-local="${h.local || false}"
+              ${!h.online ? 'disabled title="Already offline"' : ''}>Shutdown</button>
+          </td>`;
+        tbody.appendChild(tr);
+
+        // Repair output row (hidden until Fix VPN is clicked)
+        const repairTr = document.createElement('tr');
+        repairTr.className = 'repair-row';
+        repairTr.id = repairId;
+        repairTr.style.display = 'none';
+        repairTr.innerHTML = `<td colspan="4"><div class="repair-panel" id="${repairId}-panel"></div></td>`;
+        tbody.appendChild(repairTr);
+
+        // VM rows for Proxmox hosts
+        if (isProxmox && h.vms?.length) {
+          for (const vm of h.vms) {
+            const vmTr = document.createElement('tr');
+            vmTr.className = 'vm-row';
+            vmTr.innerHTML = `
+              <td>
+                <div class="vm-label">${esc(vm.name)}</div>
+                <div class="meta">${esc(vm.ip)}</div>
+              </td>
+              <td>
+                <span class="dot ${vm.online ? 'online' : 'offline'}"></span>
+                ${vm.online ? 'Online' : 'Offline'}
+              </td>
+              <td><div class="services">${renderServicesHtml(h.name, vm.name, vm)}</div></td>
+              <td class="actions">
+                <button class="btn-shutdown"
+                  data-name="${esc(h.name)}" data-vm="${esc(vm.name)}" data-action="shutdown"
+                  ${!vm.online ? 'disabled title="Already offline"' : ''}>Shutdown</button>
+              </td>`;
+            tbody.appendChild(vmTr);
+          }
+        }
+      }
+    }
+
+    document.getElementById('host-table').addEventListener('click', async (e) => {
+      // Service control buttons (start/stop/restart)
+      const svcBtn = e.target.closest('button[data-svc-action]');
+      if (svcBtn) {
+        const { host, vm, service, svcAction } = svcBtn.dataset;
+        svcBtn.disabled = true;
+        try {
+          const base = vm
+            ? `/api/hosts/${encodeURIComponent(host)}/vms/${encodeURIComponent(vm)}/services/${encodeURIComponent(service)}`
+            : `/api/hosts/${encodeURIComponent(host)}/services/${encodeURIComponent(service)}`;
+          const res = await fetch(`${base}/${svcAction}`, { method: 'POST' });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+          showToast(`${svcShortName(service)}: ${svcAction} initiated`, 'ok');
+          clearTimeout(pollTimer);
+          pollTimer = setTimeout(poll, svcAction === 'stop' ? 2000 : 3000);
+        } catch (err) {
+          showToast(`${svcShortName(service)}: ${err.message}`, 'err');
+          svcBtn.disabled = false;
+        }
+        return;
+      }
+
+      const btn = e.target.closest('button[data-action]');
+      if (!btn) return;
+      const { name, vm, action } = btn.dataset;
+
+      if (action === 'vpn-repair') {
+        startVpnRepair(name, btn);
+        return;
+      }
+
+      if (action === 'shutdown' && btn.dataset.local === 'true') {
+        if (!confirm(`Shut down ${name}?\n\nThis will stop the lanctl server itself.`)) return;
+      }
+
+      btn.disabled = true;
+      try {
+        const url = (action === 'shutdown' && vm)
+          ? `/api/hosts/${encodeURIComponent(name)}/vms/${encodeURIComponent(vm)}/shutdown`
+          : `/api/hosts/${encodeURIComponent(name)}/${action}`;
+        const res = await fetch(url, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+        const label = vm ? `${name}/${vm}` : name;
+        showToast(`${label}: ${data.status}`, 'ok');
+        clearTimeout(pollTimer);
+        pollTimer = setTimeout(poll, action === 'wake' ? 8000 : 3000);
+      } catch (err) {
+        const label = vm ? `${name}/${vm}` : name;
+        showToast(`${label}: ${err.message}`, 'err');
+        btn.disabled = false;
+      }
+    });
+
+    function startVpnRepair(name, btn) {
+      const repairId = `repair-${name}`;
+      const repairRow = document.getElementById(repairId);
+      const panel = document.getElementById(`${repairId}-panel`);
+      if (!repairRow || !panel) return;
+
+      repairRow.style.display = '';
+      panel.innerHTML = '';
+      btn.disabled = true;
+      btn.textContent = 'Repairing…';
+
+      const es = new EventSource(`/api/hosts/${encodeURIComponent(name)}/vpn-repair`, { withCredentials: false });
+      es.close();
+
+      panel.innerHTML = '';
+      fetch(`/api/hosts/${encodeURIComponent(name)}/vpn-repair`, { method: 'POST' })
+        .then(res => {
+          if (!res.ok) return res.json().then(d => { throw new Error(d.detail || `HTTP ${res.status}`); });
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buf = '';
+
+          function appendLine(text) {
+            const el = document.createElement('div');
+            if (text.startsWith('[OK]'))   el.className = 'ok';
+            if (text.startsWith('[FAIL]')) el.className = 'fail';
+            if (text === '')              el.className = 'sep';
+            el.textContent = text || ' ';
+            panel.appendChild(el);
+            panel.scrollTop = panel.scrollHeight;
+          }
+
+          function pump() {
+            return reader.read().then(({ done, value }) => {
+              if (done) {
+                btn.textContent = 'Fix VPN';
+                btn.disabled = false;
+                clearTimeout(pollTimer);
+                pollTimer = setTimeout(poll, 3000);
+                return;
+              }
+              buf += decoder.decode(value, { stream: true });
+              const parts = buf.split('\n\n');
+              buf = parts.pop();
+              for (const part of parts) {
+                const line = part.replace(/^data: ?/, '');
+                appendLine(line);
+              }
+              return pump();
+            });
+          }
+          return pump();
+        })
+        .catch(err => {
+          const el = document.createElement('div');
+          el.className = 'fail';
+          el.textContent = `[error] ${err.message}`;
+          panel.appendChild(el);
+          btn.textContent = 'Fix VPN';
+          btn.disabled = false;
+        });
+    }
+
+    function showToast(msg, type = 'ok') {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.className = `toast show ${type}`;
+      clearTimeout(t._timer);
+      t._timer = setTimeout(() => { t.className = 'toast'; }, 3000);
+    }
+
+    async function poll() {
+      try {
+        const hosts = await fetchHosts();
+        renderHosts(hosts);
+        document.getElementById('status-bar').textContent =
+          `Last updated: ${new Date().toLocaleTimeString()} · refreshes every ${POLL_MS / 1000}s`;
+      } catch (e) {
+        document.getElementById('status-bar').textContent = `Error: ${e.message}`;
+      }
+      pollTimer = setTimeout(poll, POLL_MS);
+    }
+
+    poll();
+  </script>
+</body>
+</html>

@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>logs</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, sans-serif;
+      background: #080b10;
+      color: #94a3b8;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.6rem 1rem;
+      background: #0f1117;
+      border-bottom: 1px solid #1e293b;
+      flex-shrink: 0;
+    }
+
+    .title {
+      font-size: 0.85rem;
+      font-family: monospace;
+      color: #38bdf8;
+      flex: 1;
+    }
+
+    .badge {
+      font-size: 0.7rem;
+      padding: 0.2rem 0.55rem;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+    .badge-following { background: #422006; color: #fdba74; }
+    .badge-stopped   { background: #1e293b; color: #475569; }
+
+    button {
+      padding: 0.3rem 0.75rem;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.78rem;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .btn-follow  { background: #164e63; color: #7dd3fc; }
+    .btn-stop    { background: #422006; color: #fdba74; }
+    .btn-fetch   { background: #1e293b; color: #94a3b8; }
+
+    #log {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.5rem 1rem 1rem;
+      font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      font-size: 0.75rem;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .line       { color: #64748b; }
+    .line.err   { color: #f87171; }
+    .line.warn  { color: #fbbf24; }
+    .line.info  { color: #94a3b8; }
+    .line.meta  { color: #334155; font-style: italic; }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="title" id="title">logs</span>
+    <span class="badge badge-stopped" id="badge">stopped</span>
+    <button class="btn-fetch" id="btn-fetch">Last 100 lines</button>
+    <button class="btn-follow" id="btn-follow">Follow</button>
+  </header>
+  <div id="log"></div>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const HOST = params.get('host') || '';
+    const VM = params.get('vm') || '';
+    const SERVICE = params.get('service') || '';
+
+    const label = VM ? `${HOST} › ${VM}` : HOST;
+    document.title = `${SERVICE} — ${label}`;
+    document.getElementById('title').textContent = `${label}  ·  ${SERVICE}`;
+
+    const logEl   = document.getElementById('log');
+    const badge   = document.getElementById('badge');
+    const btnFetch  = document.getElementById('btn-fetch');
+    const btnFollow = document.getElementById('btn-follow');
+
+    let es = null;
+
+    function apiBase() {
+      return VM
+        ? `/api/hosts/${encodeURIComponent(HOST)}/vms/${encodeURIComponent(VM)}/services/${encodeURIComponent(SERVICE)}`
+        : `/api/hosts/${encodeURIComponent(HOST)}/services/${encodeURIComponent(SERVICE)}`;
+    }
+    function streamUrl() { return `${apiBase()}/logs/stream`; }
+    function fetchUrl(lines = 100) { return `${apiBase()}/logs?lines=${lines}`; }
+
+    function classify(text) {
+      const l = text.toLowerCase();
+      if (l.includes('error') || l.includes('failed') || l.includes('fail')) return 'err';
+      if (l.includes('warn')) return 'warn';
+      if (l.startsWith('[')) return 'meta';
+      return 'info';
+    }
+
+    function appendLine(text) {
+      const atBottom = logEl.scrollHeight - logEl.scrollTop <= logEl.clientHeight + 40;
+      const span = document.createElement('span');
+      span.className = `line ${classify(text)}`;
+      span.textContent = text + '\n';
+      logEl.appendChild(span);
+      if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function appendMeta(text) {
+      const span = document.createElement('span');
+      span.className = 'line meta';
+      span.textContent = text + '\n';
+      logEl.appendChild(span);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function setFollowing(following) {
+      badge.textContent = following ? 'following' : 'stopped';
+      badge.className = `badge ${following ? 'badge-following' : 'badge-stopped'}`;
+      btnFollow.textContent = following ? 'Stop' : 'Follow';
+      btnFollow.className = following ? 'btn-stop' : 'btn-follow';
+    }
+
+    function stopFollow() {
+      if (es) { es.close(); es = null; }
+      setFollowing(false);
+    }
+
+    function startFollow() {
+      stopFollow();
+      logEl.innerHTML = '';
+      appendMeta('— connecting …');
+      es = new EventSource(streamUrl());
+      setFollowing(true);
+
+      es.onmessage = (e) => {
+        // Remove connecting message on first real line
+        const first = logEl.querySelector('.meta');
+        if (first && first.textContent.includes('connecting')) first.remove();
+        appendLine(e.data);
+      };
+
+      es.onerror = () => {
+        appendMeta('— stream disconnected');
+        stopFollow();
+      };
+    }
+
+    async function fetchLines() {
+      stopFollow();
+      logEl.innerHTML = '';
+      appendMeta('— fetching …');
+      try {
+        const res = await fetch(fetchUrl());
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+        logEl.innerHTML = '';
+        if (data.lines.length === 0) {
+          appendMeta('— no log entries found');
+        } else {
+          for (const line of data.lines) appendLine(line);
+        }
+      } catch (err) {
+        logEl.innerHTML = '';
+        appendMeta(`— error: ${err.message}`);
+      }
+    }
+
+    btnFollow.addEventListener('click', () => es ? stopFollow() : startFollow());
+    btnFetch.addEventListener('click', fetchLines);
+
+    if (!HOST || !SERVICE) {
+      appendMeta('— missing host or service in URL');
+    } else {
+      startFollow();
+    }
+
+  </script>
+</body>
+</html>
