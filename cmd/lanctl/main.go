@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tom/ai-dev/frontends/lanctl-go/internal/api"
 	"github.com/tom/ai-dev/frontends/lanctl-go/internal/frontend"
-	lhttphandler "github.com/tom/ai-dev/frontends/lanctl-go/internal/httphandler"
 )
 
 func main() {
@@ -36,9 +36,7 @@ func main() {
 	logPath := filepath.Join(deployDir, "frontend", "log.html")
 	frontend.Attach(mux, htmlPath, logPath)
 
-	mux.HandleFunc("GET /api/hosts", func(w http.ResponseWriter, r *http.Request) {
-		lhttphandler.JSON(w, http.StatusOK, []struct{}{})
-	})
+	api.RegisterRoutes(mux)
 
 	srv := &http.Server{
 		Addr:         ":" + port,
