@@ -33,7 +33,7 @@ Pi without the git repo (standalone, no pull):
 
 Override deploy dir or ai-dev path:
 
-    DEPLOY_DIR=/opt/lanctl AI_DEV_PATH=/opt/ai-dev python deploy.py --host mypi --arch arm64
+    DEPLOY_DIR=/opt/lanctl-go AI_DEV_PATH=/opt/ai-dev python deploy.py --host mypi --arch arm64
 
 Override service user:
 
@@ -45,14 +45,18 @@ Upgrade code without reinstalling the systemd unit:
 
 After deploying, copy your hosts config if needed:
 
-    scp frontends/lanctl-go/hosts.example.yaml pi@mypi:/opt/lanctl/hosts.yaml
+    scp frontends/lanctl-go/hosts.example.yaml pi@mypi:/opt/lanctl-go/hosts.yaml
 
 Then edit it:
 
-    ssh pi@mypi "nano /opt/lanctl/hosts.yaml"
+    ssh pi@mypi "nano /opt/lanctl-go/hosts.yaml"
+
+Ports (for head-to-head comparison with Python lanctl):
+  Python lanctl:  http://host:8003  (service: lanctl-backend.service,    dir: /opt/lanctl)
+  Go lanctl:      http://host:8004  (service: lanctl-go-backend.service, dir: /opt/lanctl-go)
 
 Environment variables (all optional):
-  DEPLOY_DIR      Deploy directory on target (default: /opt/lanctl)
+  DEPLOY_DIR      Deploy directory on target (default: /opt/lanctl-go)
   AI_DEV_PATH     Path to ai-dev repo on target (default: /opt/ai-dev)
   SERVICE_USER    OS user the service runs as (default: --user or $USER)
 """
@@ -93,7 +97,7 @@ from deploy_lib.systemd import (  # noqa: E402
 )
 from deploy_lib.target import Target  # noqa: E402
 
-BACKEND_PORT = 8003
+BACKEND_PORT = 8004   # 8003 is taken by Python lanctl — separate port for head-to-head comparison
 BINARY_NAME = "lanctl"
 
 _ARCH_FROM_UNAME: dict[str, str] = {
@@ -231,7 +235,7 @@ def _make_steps(arch: str) -> list:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
-    deploy_dir = os.environ.get("DEPLOY_DIR", "/opt/lanctl")
+    deploy_dir = os.environ.get("DEPLOY_DIR", "/opt/lanctl-go")
     ai_dev_path = os.environ.get("AI_DEV_PATH", "/opt/ai-dev")
     service_user = os.environ.get("SERVICE_USER", "")
 
@@ -278,7 +282,7 @@ def main() -> None:
         print(f"Local arch: {platform.machine()} → GOARCH={arch}")
 
     config = SystemdConfig(
-        app_name="lanctl",
+        app_name="lanctl-go",   # → unit: lanctl-go-backend.service (separate from Python lanctl-backend.service)
         project_subpath="frontends/lanctl-go",
         deploy_dir=deploy_dir,
         ai_dev_path=ai_dev_path,
