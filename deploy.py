@@ -167,10 +167,13 @@ def _make_steps(arch: str) -> list:
     def step_upload_binary(target: Target, config: SystemdConfig) -> None:
         binary: Path = config._local_binary  # type: ignore[attr-defined]
         remote = f"{config.deploy_dir}/{BINARY_NAME}"
+        remote_tmp = remote + ".new"
         print(f"Uploading binary → {remote} ...")
         try:
-            target.put(binary, remote)
-            target.run(f"chmod 0755 {remote}")
+            # Upload to a temp file then mv into place so we don't truncate
+            # the running binary (which would fail with SFTP "Failure").
+            target.put(binary, remote_tmp)
+            target.run(f"chmod 0755 {remote_tmp} && mv {remote_tmp} {remote}")
         finally:
             binary.unlink(missing_ok=True)
         print("  Done.")
