@@ -116,5 +116,7 @@ func isConnErr(err error) bool {
 		strings.Contains(s, "connection reset") ||
 		strings.Contains(s, "broken pipe") ||
 		strings.Contains(s, "use of closed network connection") ||
-		strings.Contains(s, "ssh: disconnect")
+		strings.Contains(s, "ssh: disconnect") ||
+		strings.Contains(s, "i/o timeout") ||
+		strings.Contains(s, "connection timed out")
 }
