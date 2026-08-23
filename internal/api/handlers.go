@@ -30,6 +30,7 @@ func RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/hosts/{name}/services/{service}/{action}", ServiceControl)
 	mux.HandleFunc("POST /api/hosts/{name}/vpn-repair", VPNRepair)
 	mux.HandleFunc("POST /api/hosts/{name}/vms/{vm}/shutdown", VMShutdown)
+	mux.HandleFunc("POST /api/hosts/{name}/vms/{vm}/vpn-repair", VMVPNRepair)
 	mux.HandleFunc("GET /api/hosts/{name}/vms/{vm}/services/{service}/logs/stream", VMStreamLogs)
 	mux.HandleFunc("GET /api/hosts/{name}/vms/{vm}/services/{service}/logs", VMGetLogs)
 	mux.HandleFunc("POST /api/hosts/{name}/vms/{vm}/services/{service}/{action}", VMServiceControl)
@@ -43,8 +44,9 @@ type vmStatus struct {
 	IP              string            `json:"ip"`
 	Online          bool              `json:"online"`
 	Services        []string          `json:"services"`
-	ServiceStatuses  map[string]string `json:"service_statuses"`
-	NordVPNHostname *string           `json:"nordvpn_hostname"`
+	ServiceStatuses map[string]string `json:"service_statuses"`
+	VPNHostname     *string           `json:"vpn_hostname"`
+	VPNReachable    *bool             `json:"vpn_reachable"`
 }
 
 type hostStatus struct {
@@ -55,7 +57,7 @@ type hostStatus struct {
 	Online          bool              `json:"online"`
 	Local           bool              `json:"local"`
 	Services        []string          `json:"services"`
-	ServiceStatuses  map[string]string `json:"service_statuses"`
+	ServiceStatuses map[string]string `json:"service_statuses"`
 	VPNHostname     *string           `json:"vpn_hostname"`
 	VPNReachable    *bool             `json:"vpn_reachable"`
 	VMs             *[]vmStatus       `json:"vms,omitempty"`
@@ -89,9 +91,12 @@ func checkVM(cfg config.Config, host config.Host, vm config.VM) vmStatus {
 	}
 
 	var vpnHost *string
+	var vpnReachable *bool
 	if vm.NordVPNHost != "" {
 		v := vm.NordVPNHost
 		vpnHost = &v
+		b := network.CheckSSHPort(vm.NordVPNHost, sshTimeout)
+		vpnReachable = &b
 	}
 
 	return vmStatus{
@@ -100,8 +105,9 @@ func checkVM(cfg config.Config, host config.Host, vm config.VM) vmStatus {
 		IP:              vm.IP,
 		Online:          online,
 		Services:        svcs,
-		ServiceStatuses:  statuses,
-		NordVPNHostname: vpnHost,
+		ServiceStatuses: statuses,
+		VPNHostname:     vpnHost,
+		VPNReachable:    vpnReachable,
 	}
 }
 
@@ -209,7 +215,7 @@ func GetHosts(w http.ResponseWriter, r *http.Request) {
 			Online:          res.online,
 			Local:           h.Local,
 			Services:        svcs,
-			ServiceStatuses:  res.statuses,
+			ServiceStatuses: res.statuses,
 			VPNHostname:     vpnHost,
 			VPNReachable:    vpnReachable,
 		}
@@ -464,6 +470,35 @@ func VMShutdown(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lhttphandler.JSON(w, http.StatusOK, map[string]string{"status": "shutdown initiated", "host": name, "vm": vmName})
+}
+
+// POST /api/hosts/{name}/vms/{vm}/vpn-repair
+func VMVPNRepair(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	vmName := r.PathValue("vm")
+
+	cfg, err := config.Load()
+	if err != nil {
+		lhttphandler.ErrorJSON(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	host, vm, errMsg := getProxmoxAndVM(cfg, name, vmName)
+	if errMsg != "" {
+		lhttphandler.ErrorJSON(w, http.StatusNotFound, errMsg)
+		return
+	}
+	if vm.Local {
+		lhttphandler.ErrorJSON(w, http.StatusBadRequest, "Cannot repair VPN on the local host")
+		return
+	}
+	if cfg.NordVPNToken == "" {
+		lhttphandler.ErrorJSON(w, http.StatusBadRequest, "nordvpn_token not set in hosts.yaml")
+		return
+	}
+
+	setSSEHeaders(w)
+	keyPath := config.ResolveVMSSHKey(cfg, host, vm)
+	sshops.StreamVPNRepair(vm.IP, vm.SSHUser, keyPath, cfg.NordVPNToken, w, r)
 }
 
 // GET /api/hosts/{name}/vms/{vm}/services/{service}/logs

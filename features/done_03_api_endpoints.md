@@ -16,6 +16,7 @@ Implement all REST API endpoints to reach feature parity with the Python lanctl 
 | POST | `/api/hosts/{name}/services/{service}/{action}` | start/stop/restart service |
 | POST | `/api/hosts/{name}/vpn-repair` | NordVPN repair stream |
 | POST | `/api/hosts/{name}/vms/{vm}/shutdown` | Shutdown Proxmox VM |
+| POST | `/api/hosts/{name}/vms/{vm}/vpn-repair` | VM NordVPN repair stream |
 | GET | `/api/hosts/{name}/vms/{vm}/services/{service}/logs` | VM journal lines |
 | GET | `/api/hosts/{name}/vms/{vm}/services/{service}/logs/stream` | VM SSE stream |
 | POST | `/api/hosts/{name}/vms/{vm}/services/{service}/{action}` | VM service control |

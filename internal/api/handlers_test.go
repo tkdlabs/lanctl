@@ -295,6 +295,160 @@ hosts:
 	}
 }
 
+func TestGetHosts_VMNordVPNFields(t *testing.T) {
+	writeConfig(t, `
+hosts:
+  - name: pve
+    type: proxmox
+    ip: 1.2.3.4
+    mac: "aa:bb:cc:dd:ee:ff"
+    ssh_user: root
+    vms:
+      - name: vm1
+        ip: 1.2.3.5
+        ssh_user: user
+        nordvpn_hostname: vm1.nord
+      - name: vm2
+        ip: 1.2.3.6
+        ssh_user: user
+`)
+	rr := doRequest(t, "GET", "/api/hosts")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var result []map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	vms, ok := result[0]["vms"].([]any)
+	if !ok || len(vms) != 2 {
+		t.Fatalf("expected 2 VMs, got %v", result[0]["vms"])
+	}
+	vm1 := vms[0].(map[string]any)
+	if vm1["vpn_hostname"] != "vm1.nord" {
+		t.Errorf("expected vpn_hostname 'vm1.nord', got %v", vm1["vpn_hostname"])
+	}
+	if reachable, ok := vm1["vpn_reachable"].(bool); !ok || reachable {
+		t.Errorf("expected vpn_reachable=false for unreachable host, got %v", vm1["vpn_reachable"])
+	}
+	vm2 := vms[1].(map[string]any)
+	if vm2["vpn_hostname"] != nil {
+		t.Errorf("expected vpn_hostname null for VM without nordvpn_hostname, got %v", vm2["vpn_hostname"])
+	}
+	if vm2["vpn_reachable"] != nil {
+		t.Errorf("expected vpn_reachable null for VM without nordvpn_hostname, got %v", vm2["vpn_reachable"])
+	}
+}
+
+func TestVMVPNRepair_HostNotFound(t *testing.T) {
+	writeConfig(t, `
+hosts:
+  - name: x
+    ip: 1.2.3.4
+    mac: "aa:bb:cc:dd:ee:ff"
+    ssh_user: user
+`)
+	rr := doRequest(t, "POST", "/api/hosts/ghost/vms/vm1/vpn-repair")
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rr.Code)
+	}
+}
+
+func TestVMVPNRepair_NotProxmox(t *testing.T) {
+	writeConfig(t, `
+hosts:
+  - name: standard
+    ip: 1.2.3.4
+    mac: "aa:bb:cc:dd:ee:ff"
+    ssh_user: user
+`)
+	rr := doRequest(t, "POST", "/api/hosts/standard/vms/vm1/vpn-repair")
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rr.Code)
+	}
+}
+
+func TestVMVPNRepair_VMNotFound(t *testing.T) {
+	writeConfig(t, `
+hosts:
+  - name: pve
+    type: proxmox
+    ip: 1.2.3.4
+    mac: "aa:bb:cc:dd:ee:ff"
+    ssh_user: root
+    vms:
+      - name: vm1
+        ip: 1.2.3.5
+        ssh_user: user
+`)
+	rr := doRequest(t, "POST", "/api/hosts/pve/vms/ghost/vpn-repair")
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rr.Code)
+	}
+}
+
+func TestVMVPNRepair_LocalVM(t *testing.T) {
+	writeConfig(t, `
+hosts:
+  - name: pve
+    type: proxmox
+    ip: 1.2.3.4
+    mac: "aa:bb:cc:dd:ee:ff"
+    ssh_user: root
+    vms:
+      - name: vm1
+        ip: 127.0.0.1
+        local: true
+`)
+	rr := doRequest(t, "POST", "/api/hosts/pve/vms/vm1/vpn-repair")
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestVMVPNRepair_NoToken(t *testing.T) {
+	writeConfig(t, `
+hosts:
+  - name: pve
+    type: proxmox
+    ip: 1.2.3.4
+    mac: "aa:bb:cc:dd:ee:ff"
+    ssh_user: root
+    vms:
+      - name: vm1
+        ip: 1.2.3.5
+        ssh_user: user
+`)
+	rr := doRequest(t, "POST", "/api/hosts/pve/vms/vm1/vpn-repair")
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestVMVPNRepair_SSEHeaders(t *testing.T) {
+	writeConfig(t, `
+nordvpn_token: "testtoken"
+hosts:
+  - name: pve
+    type: proxmox
+    ip: 1.2.3.4
+    mac: "aa:bb:cc:dd:ee:ff"
+    ssh_user: root
+    vms:
+      - name: vm1
+        ip: 127.0.0.1
+        ssh_user: user
+`)
+	rr := doRequest(t, "POST", "/api/hosts/pve/vms/vm1/vpn-repair")
+	// SSE headers are written before SSH attempt, so status is 200
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 (SSE), got %d", rr.Code)
+	}
+	if rr.Header().Get("Content-Type") != "text/event-stream" {
+		t.Errorf("expected text/event-stream, got %q", rr.Header().Get("Content-Type"))
+	}
+}
+
 func TestVMGetLogs_ServiceNotConfigured(t *testing.T) {
 	writeConfig(t, `
 hosts:

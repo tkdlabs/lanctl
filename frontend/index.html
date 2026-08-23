@@ -341,12 +341,26 @@
         // VM rows for Proxmox hosts
         if (isProxmox && h.vms?.length) {
           for (const vm of h.vms) {
+            const vmVpnHtml = vm.vpn_hostname != null
+              ? `<div class="vpn-badge ${vm.vpn_reachable ? 'vpn-ok' : 'vpn-down'}">
+                   <span class="dot ${vm.vpn_reachable ? 'online' : 'offline'}"></span>
+                   VPN ${vm.vpn_reachable ? 'up' : 'down'} &nbsp;·&nbsp; ${esc(vm.vpn_hostname)}
+                 </div>`
+              : '';
+
+            const vmFixVpnBtn = (vm.vpn_hostname && vm.online && !vm.vpn_reachable)
+              ? `<button class="btn-vpnfix" data-name="${esc(h.name)}" data-vm="${esc(vm.name)}" data-action="vpn-repair">Fix VPN</button>`
+              : '';
+
+            const vmRepairId = `repair-${esc(h.name)}--${esc(vm.name)}`;
+
             const vmTr = document.createElement('tr');
             vmTr.className = 'vm-row';
             vmTr.innerHTML = `
               <td>
                 <div class="vm-label">${esc(vm.name)}</div>
                 <div class="meta">${esc(vm.ip)}</div>
+                ${vmVpnHtml}
               </td>
               <td>
                 <span class="dot ${vm.online ? 'online' : 'offline'}"></span>
@@ -354,11 +368,20 @@
               </td>
               <td><div class="services">${renderServicesHtml(h.name, vm.name, vm)}</div></td>
               <td class="actions">
+                ${vmFixVpnBtn}
                 <button class="btn-shutdown"
                   data-name="${esc(h.name)}" data-vm="${esc(vm.name)}" data-action="shutdown"
                   ${!vm.online ? 'disabled title="Already offline"' : ''}>Shutdown</button>
               </td>`;
             tbody.appendChild(vmTr);
+
+            // Repair output row (hidden until Fix VPN is clicked)
+            const vmRepairTr = document.createElement('tr');
+            vmRepairTr.className = 'repair-row';
+            vmRepairTr.id = vmRepairId;
+            vmRepairTr.style.display = 'none';
+            vmRepairTr.innerHTML = `<td colspan="4"><div class="repair-panel" id="${vmRepairId}-panel"></div></td>`;
+            tbody.appendChild(vmRepairTr);
           }
         }
       }
@@ -392,7 +415,7 @@
       const { name, vm, action } = btn.dataset;
 
       if (action === 'vpn-repair') {
-        startVpnRepair(name, btn);
+        startVpnRepair(name, vm || null, btn);
         return;
       }
 
@@ -419,8 +442,8 @@
       }
     });
 
-    function startVpnRepair(name, btn) {
-      const repairId = `repair-${name}`;
+    function startVpnRepair(name, vm, btn) {
+      const repairId = vm ? `repair-${name}--${vm}` : `repair-${name}`;
       const repairRow = document.getElementById(repairId);
       const panel = document.getElementById(`${repairId}-panel`);
       if (!repairRow || !panel) return;
@@ -430,11 +453,12 @@
       btn.disabled = true;
       btn.textContent = 'Repairing…';
 
-      const es = new EventSource(`/api/hosts/${encodeURIComponent(name)}/vpn-repair`, { withCredentials: false });
-      es.close();
+      const url = vm
+        ? `/api/hosts/${encodeURIComponent(name)}/vms/${encodeURIComponent(vm)}/vpn-repair`
+        : `/api/hosts/${encodeURIComponent(name)}/vpn-repair`;
 
       panel.innerHTML = '';
-      fetch(`/api/hosts/${encodeURIComponent(name)}/vpn-repair`, { method: 'POST' })
+      fetch(url, { method: 'POST' })
         .then(res => {
           if (!res.ok) return res.json().then(d => { throw new Error(d.detail || `HTTP ${res.status}`); });
           const reader = res.body.getReader();
