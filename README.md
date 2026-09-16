@@ -107,6 +107,32 @@ sudo ./install.sh
 | GET | `/api/hosts/{name}/vms/{vm}/services/{svc}/logs/stream` | VM SSE journal |
 | POST | `/api/hosts/{name}/vms/{vm}/services/{svc}/{action}` | VM service control |
 
+## CLI
+
+`lanctl-cli` is a small shell client for the REST API. It talks to a running
+server over HTTP; it does not read `hosts.yaml` and performs no SSH itself.
+Build it with `make build-cli` (installed to `/usr/local/bin` by `install.sh`).
+
+```bash
+lanctl-cli hosts                       # table of hosts and VMs
+lanctl-cli hosts --online -o json      # JSON for scripting
+lanctl-cli wake desktop                # Wake-on-LAN
+lanctl-cli shutdown nas/nas-main -y    # shut down a VM without prompting
+lanctl-cli service nas/nas-main nginx restart
+lanctl-cli logs desktop lanctl.service -f        # follow (SSE)
+lanctl-cli logs desktop lanctl.service -n 200    # last 200 lines
+lanctl-cli vpn-repair desktop
+lanctl-cli version
+```
+
+Targets are `HOST` or `HOST/VM`. The server address comes from `--server`/
+`-s`, then `LANCTL_URL`, defaulting to `http://localhost:8003`.
+
+Global flags: `-o/--output table|json|plain`, `--timeout`, `-q/--quiet`,
+`--no-color`, `-y/--yes`. Exit codes: `0` success, `1` error, `2` usage.
+`shutdown` prompts for confirmation unless `--yes` or JSON output is used;
+when stdin is not a terminal it refuses without `--yes`.
+
 ## Security
 
 `lanctl` performs privileged operations (systemd control, journal access,

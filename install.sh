@@ -16,6 +16,10 @@
 #   SERVICE_NAME         systemd unit name                (default: lanctl)
 #   LANCTL_ALLOW_SHUTDOWN  Allow local shutdown (1/0)     (default: 1)
 #   BIN_SRC              Prebuilt binary to install       (default: ./lanctl)
+#   CLI_SRC              Prebuilt client to install       (default: ./lanctl-cli or dist/)
+#
+# The optional client binary (lanctl-cli) is installed to /usr/local/bin when
+# one is found; its absence is not an error.
 #
 # If no prebuilt binary is found and the Go toolchain is available, it is
 # built automatically.
@@ -56,6 +60,34 @@ install -m 0755 "$BIN_SRC" "$DEPLOY_DIR/lanctl"
 
 echo "==> Installing frontend files"
 find "$FRONTEND_SRC" -maxdepth 1 -name '*.html' -exec install -m 0644 {} "$DEPLOY_DIR/frontend/" \;
+
+# Optionally install the client CLI (non-fatal when absent).
+detect_cli() {
+  if [ -n "${CLI_SRC:-}" ] && [ -f "$CLI_SRC" ]; then
+    echo "$CLI_SRC"; return 0
+  fi
+  if [ -f "$SCRIPT_DIR/lanctl-cli" ]; then
+    echo "$SCRIPT_DIR/lanctl-cli"; return 0
+  fi
+  local arch=""
+  case "$(uname -m)" in
+    x86_64|amd64)     arch=amd64 ;;
+    aarch64|arm64)    arch=arm64 ;;
+    armv7l|armv6l|arm) arch=arm ;;
+  esac
+  if [ -n "$arch" ] && [ -f "$SCRIPT_DIR/dist/lanctl-cli-linux-$arch" ]; then
+    echo "$SCRIPT_DIR/dist/lanctl-cli-linux-$arch"
+  fi
+  return 0
+}
+
+CLI_BIN="$(detect_cli)"
+if [ -n "$CLI_BIN" ]; then
+  echo "==> Installing lanctl-cli to /usr/local/bin"
+  install -m 0755 "$CLI_BIN" /usr/local/bin/lanctl-cli
+else
+  echo "==> lanctl-cli not found (run 'make build-cli' to build it); skipping client install"
+fi
 
 if [ -f "$CONFIG_SRC" ]; then
   install -m 0644 "$CONFIG_SRC" "$DEPLOY_DIR/hosts.example.yaml"

@@ -1,5 +1,6 @@
 # Build artifacts
 /lanctl
+/lanctl-cli
 /dist/
 coverage.out
 
