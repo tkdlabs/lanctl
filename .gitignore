@@ -1,0 +1,12 @@
+# Build artifacts
+/lanctl
+/dist/
+coverage.out
+
+# Runtime config (contains host credentials)
+/hosts.yaml
+.env
+
+# Editor / OS
+.DS_Store
+*.swp

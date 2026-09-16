@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tom/ai-dev/frontends/lanctl-go/internal/network"
+	"github.com/tkdlabs/lanctl/internal/network"
 )
 
 // fakeOps is a hermetic implementation of operations. It performs no I/O so
@@ -907,5 +907,20 @@ func TestSplitLines(t *testing.T) {
 		if len(got) != tt.expected {
 			t.Errorf("splitLines(%q): want %d lines, got %d", tt.input, tt.expected, len(got))
 		}
+	}
+}
+
+func TestVersion(t *testing.T) {
+	useFakeOps(t)
+	rr := doRequest(t, "GET", "/api/version")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if got["version"] == "" {
+		t.Error("expected a non-empty version")
 	}
 }

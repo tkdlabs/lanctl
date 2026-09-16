@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/tom/ai-dev/frontends/lanctl-go/internal/localops"
-	"github.com/tom/ai-dev/frontends/lanctl-go/internal/network"
-	"github.com/tom/ai-dev/frontends/lanctl-go/internal/sshops"
+	"github.com/tkdlabs/lanctl/internal/localops"
+	"github.com/tkdlabs/lanctl/internal/network"
+	"github.com/tkdlabs/lanctl/internal/sshops"
 )
 
 // operations is the seam through which handlers reach the outside world

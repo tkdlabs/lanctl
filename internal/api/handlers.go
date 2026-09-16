@@ -9,8 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tom/ai-dev/frontends/lanctl-go/internal/config"
-	lhttphandler "github.com/tom/ai-dev/frontends/lanctl-go/internal/httphandler"
+	"github.com/tkdlabs/lanctl/internal/config"
+	lhttphandler "github.com/tkdlabs/lanctl/internal/httphandler"
+	"github.com/tkdlabs/lanctl/internal/version"
 )
 
 const sshTimeout = 1500 * time.Millisecond
@@ -19,6 +20,7 @@ var validActions = map[string]bool{"start": true, "stop": true, "restart": true}
 
 // RegisterRoutes registers all /api/* routes on mux.
 func RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/version", Version)
 	mux.HandleFunc("GET /api/hosts", GetHosts)
 	mux.HandleFunc("POST /api/hosts/{name}/wake", Wake)
 	mux.HandleFunc("POST /api/hosts/{name}/shutdown", Shutdown)
@@ -31,6 +33,13 @@ func RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/hosts/{name}/vms/{vm}/services/{service}/logs/stream", VMStreamLogs)
 	mux.HandleFunc("GET /api/hosts/{name}/vms/{vm}/services/{service}/logs", VMGetLogs)
 	mux.HandleFunc("POST /api/hosts/{name}/vms/{vm}/services/{service}/{action}", VMServiceControl)
+}
+
+// ── GET /api/version ──────────────────────────────────────────────────────────
+
+// Version returns the running build version.
+func Version(w http.ResponseWriter, r *http.Request) {
+	lhttphandler.JSON(w, http.StatusOK, map[string]string{"version": version.Version})
 }
 
 // ── Response types ────────────────────────────────────────────────────────────

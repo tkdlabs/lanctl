@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { goarch: amd64, goarm: "",  suffix: amd64 }
+          - { goarch: arm64, goarm: "",  suffix: arm64 }
+          - { goarch: arm,   goarm: "7", suffix: arm }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/tkdlabs/lanctl/internal/version.Version=${GITHUB_REF_NAME}" \
+            -o "dist/lanctl-linux-${{ matrix.suffix }}" ./cmd/lanctl/
+
+      - name: Package
+        run: |
+          dir="lanctl-linux-${{ matrix.suffix }}"
+          mkdir -p "$dir/frontend"
+          cp "dist/lanctl-linux-${{ matrix.suffix }}" "$dir/lanctl"
+          cp frontend/*.html "$dir/frontend/"
+          cp install.sh lanctl.service hosts.example.yaml README.md LICENSE "$dir/"
+          chmod +x "$dir/install.sh"
+          tar -czf "$dir.tar.gz" "$dir"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lanctl-linux-${{ matrix.suffix }}
+          path: lanctl-linux-${{ matrix.suffix }}.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz
+          generate_release_notes: true

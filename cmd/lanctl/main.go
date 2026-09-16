@@ -11,8 +11,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tom/ai-dev/frontends/lanctl-go/internal/api"
-	"github.com/tom/ai-dev/frontends/lanctl-go/internal/frontend"
+	"github.com/tkdlabs/lanctl/internal/api"
+	"github.com/tkdlabs/lanctl/internal/frontend"
+	"github.com/tkdlabs/lanctl/internal/version"
 )
 
 func main() {
@@ -60,7 +61,7 @@ func main() {
 		close(done)
 	}()
 
-	log.Printf("lanctl listening on :%s", port)
+	log.Printf("lanctl %s listening on :%s", version.Version, port)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("server error: %v", err)
 	}
