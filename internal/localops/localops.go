@@ -2,25 +2,52 @@ package localops
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
 )
 
+// run executes a command without elevation and returns its stdout.
+// It is a package variable so tests can substitute a fake.
+var run = func(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).Output()
+}
+
+// runSudo executes a command via sudo and returns its combined output.
+// It is a package variable so tests can substitute a fake.
+var runSudo = func(name string, args ...string) ([]byte, error) {
+	return exec.Command("sudo", append([]string{name}, args...)...).CombinedOutput()
+}
+
 // Shutdown runs `sudo shutdown -h now` locally.
+//
+// It refuses to run unless LANCTL_ALLOW_SHUTDOWN=1 is set. This prevents
+// accidental power-offs from tests, dev runs, or shell mistakes.
 func Shutdown() error {
-	return exec.Command("sudo", "shutdown", "-h", "now").Run()
+	if os.Getenv("LANCTL_ALLOW_SHUTDOWN") != "1" {
+		return errors.New("local shutdown disabled (set LANCTL_ALLOW_SHUTDOWN=1 to enable)")
+	}
+	_, err := runSudo("shutdown", "-h", "now")
+	return err
 }
 
 // ServiceStatuses runs `systemctl is-active` for each service and returns a map.
 // systemctl exits non-zero when any service is inactive, so we ignore the error.
 func ServiceStatuses(services []string) (map[string]string, error) {
 	args := append([]string{"is-active"}, services...)
-	cmd := exec.Command("systemctl", args...)
-	out, _ := cmd.Output()
-	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	out, _ := run("systemctl", args...)
+	return parseStatusOutput(string(out), services), nil
+}
+
+// parseStatusOutput maps newline-separated `systemctl is-active` output onto
+// services by position. Missing or blank lines become "unknown".
+func parseStatusOutput(out string, services []string) map[string]string {
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	statuses := make(map[string]string, len(services))
 	for i, svc := range services {
 		if i < len(lines) && lines[i] != "" {
@@ -29,13 +56,12 @@ func ServiceStatuses(services []string) (map[string]string, error) {
 			statuses[svc] = "unknown"
 		}
 	}
-	return statuses, nil
+	return statuses
 }
 
 // ServiceControl runs `sudo systemctl <action> <service>` locally.
 func ServiceControl(service, action string) error {
-	cmd := exec.Command("sudo", "systemctl", action, service)
-	out, err := cmd.CombinedOutput()
+	out, err := runSudo("systemctl", action, service)
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if msg == "" {
@@ -48,12 +74,17 @@ func ServiceControl(service, action string) error {
 
 // JournalLines returns the last n lines of a service's journal.
 func JournalLines(service string, n int) (string, error) {
-	cmd := exec.Command("journalctl", "-u", service, "-n", fmt.Sprintf("%d", n), "--no-pager", "--output=short-iso")
-	out, err := cmd.Output()
+	out, err := run("journalctl", "-u", service, "-n", fmt.Sprintf("%d", n), "--no-pager", "--output=short-iso")
 	if err != nil {
 		return "", err
 	}
 	return string(out), nil
+}
+
+// streamCmd builds the command used by StreamJournal. It is a package
+// variable so tests can substitute a fake process.
+var streamCmd = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, name, args...)
 }
 
 // StreamJournal streams journalctl -f output to w via SSE until r.Context() is done.
@@ -63,7 +94,7 @@ func StreamJournal(service string, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cmd := exec.CommandContext(r.Context(), "journalctl", "-u", service, "-f", "-n", "50", "--no-pager", "--output=short-iso")
+	cmd := streamCmd(r.Context(), "journalctl", "-u", service, "-f", "-n", "50", "--no-pager", "--output=short-iso")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		fmt.Fprintf(w, "data: [error: %v]\n\n", err)

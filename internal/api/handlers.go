@@ -11,9 +11,6 @@ import (
 
 	"github.com/tom/ai-dev/frontends/lanctl-go/internal/config"
 	lhttphandler "github.com/tom/ai-dev/frontends/lanctl-go/internal/httphandler"
-	"github.com/tom/ai-dev/frontends/lanctl-go/internal/localops"
-	"github.com/tom/ai-dev/frontends/lanctl-go/internal/network"
-	"github.com/tom/ai-dev/frontends/lanctl-go/internal/sshops"
 )
 
 const sshTimeout = 1500 * time.Millisecond
@@ -66,17 +63,17 @@ type hostStatus struct {
 // ── Concurrent host/VM checkers ───────────────────────────────────────────────
 
 func checkVM(cfg config.Config, host config.Host, vm config.VM) vmStatus {
-	online := vm.Local || network.CheckSSHPort(vm.IP, sshTimeout)
+	online := vm.Local || ops.CheckSSHPort(vm.IP, sshTimeout)
 
 	statuses := map[string]string{}
 	if online && len(vm.Services) > 0 {
 		var err error
 		var s map[string]string
 		if vm.Local {
-			s, err = localops.ServiceStatuses(vm.Services)
+			s, err = ops.ServiceStatuses(vm.Services)
 		} else {
 			keyPath := config.ResolveVMSSHKey(cfg, host, vm)
-			s, err = sshops.ServiceStatuses(vm.IP, vm.SSHUser, keyPath, vm.Services)
+			s, err = ops.SSHServiceStatuses(vm.IP, vm.SSHUser, keyPath, vm.Services)
 		}
 		if err != nil {
 			log.Printf("service status check failed for VM %s: %v", vm.Name, err)
@@ -95,7 +92,7 @@ func checkVM(cfg config.Config, host config.Host, vm config.VM) vmStatus {
 	if vm.NordVPNHost != "" {
 		v := vm.NordVPNHost
 		vpnHost = &v
-		b := network.CheckSSHPort(vm.NordVPNHost, sshTimeout)
+		b := ops.CheckSSHPort(vm.NordVPNHost, sshTimeout)
 		vpnReachable = &b
 	}
 
@@ -118,7 +115,7 @@ type hostCheckResult struct {
 }
 
 func checkHost(cfg config.Config, host config.Host) hostCheckResult {
-	online := host.Local || network.CheckSSHPort(host.IP, sshTimeout)
+	online := host.Local || ops.CheckSSHPort(host.IP, sshTimeout)
 
 	statuses := map[string]string{}
 
@@ -141,10 +138,10 @@ func checkHost(cfg config.Config, host config.Host) hostCheckResult {
 		var err error
 		var s map[string]string
 		if host.Local {
-			s, err = localops.ServiceStatuses(host.Services)
+			s, err = ops.ServiceStatuses(host.Services)
 		} else {
 			keyPath := config.ResolveSSHKey(cfg, host)
-			s, err = sshops.ServiceStatuses(host.IP, host.SSHUser, keyPath, host.Services)
+			s, err = ops.SSHServiceStatuses(host.IP, host.SSHUser, keyPath, host.Services)
 		}
 		if err != nil {
 			log.Printf("service status check failed for %s: %v", host.Name, err)
@@ -176,7 +173,7 @@ func GetHosts(w http.ResponseWriter, r *http.Request) {
 			defer wg.Done()
 			hostResults[i] = checkHost(cfg, h)
 			if h.NordVPNHost != "" {
-				vpnOnline[i] = network.CheckSSHPort(h.NordVPNHost, sshTimeout)
+				vpnOnline[i] = ops.CheckSSHPort(h.NordVPNHost, sshTimeout)
 			} else {
 				vpnOnline[i] = true // sentinel; vpn_reachable will be null for these
 			}
@@ -252,7 +249,7 @@ func Wake(w http.ResponseWriter, r *http.Request) {
 	if broadcast == "" {
 		broadcast = "255.255.255.255"
 	}
-	if err := network.SendMagicPacket(host.MAC, broadcast, 9); err != nil {
+	if err := ops.SendMagicPacket(host.MAC, broadcast, 9); err != nil {
 		lhttphandler.ErrorJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -274,13 +271,13 @@ func Shutdown(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if host.Local {
-		if err := localops.Shutdown(); err != nil {
+		if err := ops.Shutdown(); err != nil {
 			lhttphandler.ErrorJSON(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 	} else {
 		keyPath := config.ResolveSSHKey(cfg, host)
-		if err := sshops.Shutdown(host.IP, host.SSHUser, keyPath); err != nil {
+		if err := ops.SSHShutdown(host.IP, host.SSHUser, keyPath); err != nil {
 			lhttphandler.ErrorJSON(w, http.StatusInternalServerError, fmt.Sprintf("SSH error: %v", err))
 			return
 		}
@@ -312,10 +309,10 @@ func GetLogs(w http.ResponseWriter, r *http.Request) {
 
 	var out string
 	if host.Local {
-		out, err = localops.JournalLines(service, lines)
+		out, err = ops.JournalLines(service, lines)
 	} else {
 		keyPath := config.ResolveSSHKey(cfg, host)
-		out, err = sshops.JournalLines(host.IP, host.SSHUser, keyPath, service, lines)
+		out, err = ops.SSHJournalLines(host.IP, host.SSHUser, keyPath, service, lines)
 	}
 	if err != nil {
 		lhttphandler.ErrorJSON(w, http.StatusInternalServerError, fmt.Sprintf("SSH error: %v", err))
@@ -349,10 +346,10 @@ func StreamLogs(w http.ResponseWriter, r *http.Request) {
 
 	setSSEHeaders(w)
 	if host.Local {
-		localops.StreamJournal(service, w, r)
+		ops.StreamJournal(service, w, r)
 	} else {
 		keyPath := config.ResolveSSHKey(cfg, host)
-		sshops.StreamJournal(host.IP, host.SSHUser, keyPath, service, w, r)
+		ops.SSHStreamJournal(host.IP, host.SSHUser, keyPath, service, w, r)
 	}
 }
 
@@ -384,10 +381,10 @@ func ServiceControl(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if host.Local {
-		err = localops.ServiceControl(service, action)
+		err = ops.ServiceControl(service, action)
 	} else {
 		keyPath := config.ResolveSSHKey(cfg, host)
-		err = sshops.ServiceControl(host.IP, host.SSHUser, keyPath, service, action)
+		err = ops.SSHServiceControl(host.IP, host.SSHUser, keyPath, service, action)
 	}
 	if err != nil {
 		lhttphandler.ErrorJSON(w, http.StatusInternalServerError, err.Error())
@@ -422,7 +419,7 @@ func VPNRepair(w http.ResponseWriter, r *http.Request) {
 
 	setSSEHeaders(w)
 	keyPath := config.ResolveSSHKey(cfg, host)
-	sshops.StreamVPNRepair(host.IP, host.SSHUser, keyPath, cfg.NordVPNToken, w, r)
+	ops.StreamVPNRepair(host.IP, host.SSHUser, keyPath, cfg.NordVPNToken, w, r)
 }
 
 // ── VM routes ─────────────────────────────────────────────────────────────────
@@ -459,10 +456,10 @@ func VMShutdown(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if vm.Local {
-		err = localops.Shutdown()
+		err = ops.Shutdown()
 	} else {
 		keyPath := config.ResolveVMSSHKey(cfg, host, vm)
-		err = sshops.Shutdown(vm.IP, vm.SSHUser, keyPath)
+		err = ops.SSHShutdown(vm.IP, vm.SSHUser, keyPath)
 	}
 	if err != nil {
 		lhttphandler.ErrorJSON(w, http.StatusInternalServerError, fmt.Sprintf("SSH error: %v", err))
@@ -498,7 +495,7 @@ func VMVPNRepair(w http.ResponseWriter, r *http.Request) {
 
 	setSSEHeaders(w)
 	keyPath := config.ResolveVMSSHKey(cfg, host, vm)
-	sshops.StreamVPNRepair(vm.IP, vm.SSHUser, keyPath, cfg.NordVPNToken, w, r)
+	ops.StreamVPNRepair(vm.IP, vm.SSHUser, keyPath, cfg.NordVPNToken, w, r)
 }
 
 // GET /api/hosts/{name}/vms/{vm}/services/{service}/logs
@@ -525,10 +522,10 @@ func VMGetLogs(w http.ResponseWriter, r *http.Request) {
 
 	var out string
 	if vm.Local {
-		out, err = localops.JournalLines(service, lines)
+		out, err = ops.JournalLines(service, lines)
 	} else {
 		keyPath := config.ResolveVMSSHKey(cfg, host, vm)
-		out, err = sshops.JournalLines(vm.IP, vm.SSHUser, keyPath, service, lines)
+		out, err = ops.SSHJournalLines(vm.IP, vm.SSHUser, keyPath, service, lines)
 	}
 	if err != nil {
 		lhttphandler.ErrorJSON(w, http.StatusInternalServerError, fmt.Sprintf("SSH error: %v", err))
@@ -562,10 +559,10 @@ func VMStreamLogs(w http.ResponseWriter, r *http.Request) {
 
 	setSSEHeaders(w)
 	if vm.Local {
-		localops.StreamJournal(service, w, r)
+		ops.StreamJournal(service, w, r)
 	} else {
 		keyPath := config.ResolveVMSSHKey(cfg, host, vm)
-		sshops.StreamJournal(vm.IP, vm.SSHUser, keyPath, service, w, r)
+		ops.SSHStreamJournal(vm.IP, vm.SSHUser, keyPath, service, w, r)
 	}
 }
 
@@ -598,10 +595,10 @@ func VMServiceControl(w http.ResponseWriter, r *http.Request) {
 
 	var err2 error
 	if vm.Local {
-		err2 = localops.ServiceControl(service, action)
+		err2 = ops.ServiceControl(service, action)
 	} else {
 		keyPath := config.ResolveVMSSHKey(cfg, host, vm)
-		err2 = sshops.ServiceControl(vm.IP, vm.SSHUser, keyPath, service, action)
+		err2 = ops.SSHServiceControl(vm.IP, vm.SSHUser, keyPath, service, action)
 	}
 	if err2 != nil {
 		lhttphandler.ErrorJSON(w, http.StatusInternalServerError, err2.Error())

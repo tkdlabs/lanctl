@@ -2,12 +2,95 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/tom/ai-dev/frontends/lanctl-go/internal/network"
 )
+
+// fakeOps is a hermetic implementation of operations. It performs no I/O so
+// tests never touch a real host, service, or network.
+type fakeOps struct {
+	checkSSHPort      bool
+	shutdownErr       error
+	serviceControlErr error
+	journalLinesOut   string
+	journalLinesErr   error
+	sshShutdownErr    error
+	sshServiceCtlErr  error
+	sshJournalErr     error
+
+	shutdownCalls int
+}
+
+func (f *fakeOps) SendMagicPacket(mac, broadcast string, port int) error {
+	_, err := network.BuildMagicPacket(mac)
+	return err
+}
+
+func (f *fakeOps) CheckSSHPort(host string, timeout time.Duration) bool {
+	return f.checkSSHPort
+}
+
+func (f *fakeOps) Shutdown() error {
+	f.shutdownCalls++
+	return f.shutdownErr
+}
+
+func (f *fakeOps) ServiceStatuses(services []string) (map[string]string, error) {
+	return statusMap(services), nil
+}
+
+func (f *fakeOps) ServiceControl(service, action string) error { return f.serviceControlErr }
+
+func (f *fakeOps) JournalLines(service string, n int) (string, error) {
+	return f.journalLinesOut, f.journalLinesErr
+}
+
+func (f *fakeOps) StreamJournal(service string, w http.ResponseWriter, r *http.Request) {}
+
+func (f *fakeOps) SSHShutdown(ip, user, keyPath string) error { return f.sshShutdownErr }
+
+func (f *fakeOps) SSHServiceStatuses(ip, user, keyPath string, services []string) (map[string]string, error) {
+	return statusMap(services), nil
+}
+
+func (f *fakeOps) SSHServiceControl(ip, user, keyPath, service, action string) error {
+	return f.sshServiceCtlErr
+}
+
+func (f *fakeOps) SSHJournalLines(ip, user, keyPath, service string, n int) (string, error) {
+	return f.journalLinesOut, f.sshJournalErr
+}
+
+func (f *fakeOps) SSHStreamJournal(ip, user, keyPath, service string, w http.ResponseWriter, r *http.Request) {
+}
+
+func (f *fakeOps) StreamVPNRepair(ip, user, keyPath, token string, w http.ResponseWriter, r *http.Request) {
+}
+
+func statusMap(services []string) map[string]string {
+	m := make(map[string]string, len(services))
+	for _, s := range services {
+		m[s] = "active"
+	}
+	return m
+}
+
+// useFakeOps swaps the package operations for a fake and restores it after the test.
+func useFakeOps(t *testing.T) *fakeOps {
+	t.Helper()
+	f := &fakeOps{}
+	prev := ops
+	ops = f
+	t.Cleanup(func() { ops = prev })
+	return f
+}
 
 // writeConfig creates a hosts.yaml in a temp dir and sets DEPLOY_DIR to it.
 func writeConfig(t *testing.T, content string) (cleanup func()) {
@@ -31,6 +114,7 @@ func doRequest(t *testing.T, method, path string) *httptest.ResponseRecorder {
 }
 
 func TestGetHosts_ReturnsHostList(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: myhost
@@ -58,6 +142,7 @@ hosts:
 }
 
 func TestGetHosts_BadConfig(t *testing.T) {
+	useFakeOps(t)
 	t.Setenv("DEPLOY_DIR", t.TempDir()) // no hosts.yaml → error
 	rr := doRequest(t, "GET", "/api/hosts")
 	if rr.Code != http.StatusInternalServerError {
@@ -66,6 +151,7 @@ func TestGetHosts_BadConfig(t *testing.T) {
 }
 
 func TestGetHosts_ProxmoxIncludesVMs(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: pve
@@ -91,6 +177,7 @@ hosts:
 }
 
 func TestWake_HostNotFound(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: other
@@ -105,6 +192,7 @@ hosts:
 }
 
 func TestWake_InvalidMAC(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: bad
@@ -119,6 +207,7 @@ hosts:
 }
 
 func TestShutdown_HostNotFound(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: other
@@ -133,6 +222,7 @@ hosts:
 }
 
 func TestGetLogs_HostNotFound(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: x
@@ -147,6 +237,7 @@ hosts:
 }
 
 func TestGetLogs_ServiceNotConfigured(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: myhost
@@ -162,6 +253,7 @@ hosts:
 }
 
 func TestStreamLogs_ServiceNotConfigured(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: myhost
@@ -177,6 +269,7 @@ hosts:
 }
 
 func TestServiceControl_InvalidAction(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: myhost
@@ -192,6 +285,7 @@ hosts:
 }
 
 func TestServiceControl_HostNotFound(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: x
@@ -206,6 +300,7 @@ hosts:
 }
 
 func TestServiceControl_ServiceNotConfigured(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: myhost
@@ -221,6 +316,7 @@ hosts:
 }
 
 func TestVPNRepair_HostNotFound(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: x
@@ -235,6 +331,7 @@ hosts:
 }
 
 func TestVPNRepair_LocalHost(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: local
@@ -249,6 +346,7 @@ hosts:
 }
 
 func TestVPNRepair_NoToken(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: remote
@@ -263,6 +361,7 @@ hosts:
 }
 
 func TestVMShutdown_NotProxmox(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: standard
@@ -277,6 +376,7 @@ hosts:
 }
 
 func TestVMShutdown_VMNotFound(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: pve
@@ -296,6 +396,7 @@ hosts:
 }
 
 func TestGetHosts_VMNordVPNFields(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: pve
@@ -341,6 +442,7 @@ hosts:
 }
 
 func TestVMVPNRepair_HostNotFound(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: x
@@ -355,6 +457,7 @@ hosts:
 }
 
 func TestVMVPNRepair_NotProxmox(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: standard
@@ -369,6 +472,7 @@ hosts:
 }
 
 func TestVMVPNRepair_VMNotFound(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: pve
@@ -388,6 +492,7 @@ hosts:
 }
 
 func TestVMVPNRepair_LocalVM(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: pve
@@ -407,6 +512,7 @@ hosts:
 }
 
 func TestVMVPNRepair_NoToken(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: pve
@@ -426,6 +532,7 @@ hosts:
 }
 
 func TestVMVPNRepair_SSEHeaders(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 nordvpn_token: "testtoken"
 hosts:
@@ -450,6 +557,7 @@ hosts:
 }
 
 func TestVMGetLogs_ServiceNotConfigured(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: pve
@@ -470,6 +578,7 @@ hosts:
 }
 
 func TestVMServiceControl_InvalidAction(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: pve
@@ -501,6 +610,7 @@ hosts:
 `
 
 func TestGetHosts_LocalHost(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, localHostConfig)
 	rr := doRequest(t, "GET", "/api/hosts")
 	if rr.Code != http.StatusOK {
@@ -520,25 +630,25 @@ func TestGetHosts_LocalHost(t *testing.T) {
 }
 
 func TestGetLogs_LocalHost(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, localHostConfig)
-	// journalctl with unknown service still returns 200 with empty or error lines
 	rr := doRequest(t, "GET", "/api/hosts/local/services/definitely-nonexistent-lanctl-test-svc/logs")
-	// success or 500 depending on journalctl availability — just verify it's not 404
-	if rr.Code == http.StatusNotFound {
-		t.Fatalf("got 404, expected 200 or 500")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
 
 func TestServiceControl_LocalHost(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, localHostConfig)
 	rr := doRequest(t, "POST", "/api/hosts/local/services/definitely-nonexistent-lanctl-test-svc/stop")
-	// Will fail with systemctl error → 500, but not 404/400
-	if rr.Code == http.StatusNotFound || rr.Code == http.StatusBadRequest {
-		t.Fatalf("unexpected status %d", rr.Code)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
 
 func TestVMShutdown_LocalVM(t *testing.T) {
+	f := useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: pve
@@ -551,14 +661,17 @@ hosts:
         ip: 127.0.0.1
         local: true
 `)
-	// Will attempt local shutdown — may fail (permission denied) but exercises branch
 	rr := doRequest(t, "POST", "/api/hosts/pve/vms/vm1/shutdown")
-	if rr.Code == http.StatusNotFound {
-		t.Fatalf("got 404, VM should be found")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if f.shutdownCalls != 1 {
+		t.Fatalf("expected local shutdown to be called once, got %d", f.shutdownCalls)
 	}
 }
 
 func TestVMGetLogs_LocalVM(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: pve
@@ -579,6 +692,7 @@ hosts:
 }
 
 func TestVMServiceControl_LocalVM(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: pve
@@ -598,10 +712,10 @@ hosts:
 	}
 }
 
-// ── SSH-host error-path tests (SSH will fail → exercises non-local branches) ──
+// ── SSH-host error-path tests (fake returns SSH errors) ──────────────────────
 
-// sshHostConfig is a config with a non-local SSH host pointing at 127.0.0.1:22
-// which will be unreachable (SSH key does not exist) causing predictable errors.
+// sshHostConfig is a config with a non-local SSH host. The fake operations
+// return injected errors, so no real connection is attempted.
 const sshHostConfig = `
 hosts:
   - name: remote
@@ -612,15 +726,18 @@ hosts:
 `
 
 func TestShutdown_SSHError(t *testing.T) {
+	f := useFakeOps(t)
+	f.sshShutdownErr = errors.New("ssh: connection refused")
 	writeConfig(t, sshHostConfig)
 	rr := doRequest(t, "POST", "/api/hosts/remote/shutdown")
-	// SSH key doesn't exist → 500
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
 
 func TestGetLogs_SSHError(t *testing.T) {
+	f := useFakeOps(t)
+	f.sshJournalErr = errors.New("ssh: connection refused")
 	writeConfig(t, sshHostConfig)
 	rr := doRequest(t, "GET", "/api/hosts/remote/services/foo/logs")
 	if rr.Code != http.StatusInternalServerError {
@@ -629,6 +746,8 @@ func TestGetLogs_SSHError(t *testing.T) {
 }
 
 func TestServiceControl_SSHError(t *testing.T) {
+	f := useFakeOps(t)
+	f.sshServiceCtlErr = errors.New("ssh: connection refused")
 	writeConfig(t, sshHostConfig)
 	rr := doRequest(t, "POST", "/api/hosts/remote/services/foo/start")
 	if rr.Code != http.StatusInternalServerError {
@@ -637,6 +756,8 @@ func TestServiceControl_SSHError(t *testing.T) {
 }
 
 func TestVMShutdown_SSHError(t *testing.T) {
+	f := useFakeOps(t)
+	f.sshShutdownErr = errors.New("ssh: connection refused")
 	writeConfig(t, `
 hosts:
   - name: pve
@@ -656,6 +777,8 @@ hosts:
 }
 
 func TestVMGetLogs_SSHError(t *testing.T) {
+	f := useFakeOps(t)
+	f.sshJournalErr = errors.New("ssh: connection refused")
 	writeConfig(t, `
 hosts:
   - name: pve
@@ -676,6 +799,8 @@ hosts:
 }
 
 func TestVMServiceControl_SSHError(t *testing.T) {
+	f := useFakeOps(t)
+	f.sshServiceCtlErr = errors.New("ssh: connection refused")
 	writeConfig(t, `
 hosts:
   - name: pve
@@ -696,6 +821,7 @@ hosts:
 }
 
 func TestVPNRepair_SSEHeaders(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 nordvpn_token: "testtoken"
 hosts:
@@ -715,6 +841,7 @@ hosts:
 }
 
 func TestStreamLogs_SSEHeaders(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, sshHostConfig)
 	rr := doRequest(t, "GET", "/api/hosts/remote/services/foo/logs/stream")
 	// SSE headers are written before SSH attempt
@@ -724,6 +851,7 @@ func TestStreamLogs_SSEHeaders(t *testing.T) {
 }
 
 func TestVMStreamLogs_SSEHeaders(t *testing.T) {
+	useFakeOps(t)
 	writeConfig(t, `
 hosts:
   - name: pve
