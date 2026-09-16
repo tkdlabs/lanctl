@@ -126,7 +126,13 @@ lanctl-cli version
 ```
 
 Targets are `HOST` or `HOST/VM`. The server address comes from `--server`/
-`-s`, then `LANCTL_URL`, defaulting to `http://localhost:8003`.
+`-s`, then `LANCTL_URL`, defaulting to `http://localhost:8003`. A scheme is
+optional, so `LANCTL_URL=rpi.local:8004` implies `http://`:
+
+```bash
+export LANCTL_URL=rpi.local:8004   # e.g. add to ~/.bashrc
+lanctl-cli hosts
+```
 
 Global flags: `-o/--output table|json|plain`, `--timeout`, `-q/--quiet`,
 `--no-color`, `-y/--yes`. Exit codes: `0` success, `1` error, `2` usage.

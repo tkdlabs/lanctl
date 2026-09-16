@@ -34,6 +34,26 @@ func TestNew_TrimsTrailingSlashAndAppliesOptions(t *testing.T) {
 	}
 }
 
+func TestNew_NormalizesBaseURL(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"", DefaultBaseURL},
+		{"   ", DefaultBaseURL},
+		{"rpi.local:8004", "http://rpi.local:8004"},
+		{"  rpi.local:8004  ", "http://rpi.local:8004"},
+		{"localhost:8003/", "http://localhost:8003"},
+		{"http://example:8003/", "http://example:8003"},
+		{"https://example:8004/", "https://example:8004"},
+		{"[::1]:8004", "http://[::1]:8004"},
+	}
+	for _, tt := range tests {
+		if got := New(tt.in).BaseURL; got != tt.want {
+			t.Errorf("New(%q).BaseURL = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
 func TestRequestPathsAndMethods(t *testing.T) {
 	ctx := context.Background()
 	tests := []struct {

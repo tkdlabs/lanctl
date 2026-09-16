@@ -42,20 +42,31 @@ func WithTimeout(d time.Duration) Option {
 	return func(c *Client) { c.HTTP.Timeout = d }
 }
 
-// New returns a Client for baseURL. An empty baseURL uses DefaultBaseURL.
-// A trailing slash is trimmed so paths can be concatenated safely.
+// New returns a Client for baseURL. An empty baseURL uses DefaultBaseURL, and a
+// baseURL without a scheme (for example "rpi.local:8004") defaults to http.
+// Surrounding whitespace and trailing slashes are trimmed.
 func New(baseURL string, opts ...Option) *Client {
-	if baseURL == "" {
-		baseURL = DefaultBaseURL
-	}
 	c := &Client{
-		BaseURL: strings.TrimRight(baseURL, "/"),
+		BaseURL: normalizeBaseURL(baseURL),
 		HTTP:    &http.Client{Timeout: DefaultTimeout},
 	}
 	for _, o := range opts {
 		o(c)
 	}
 	return c
+}
+
+// normalizeBaseURL turns user input such as "host:8004" or "http://host:8004/"
+// into a clean "scheme://host[:port]" prefix.
+func normalizeBaseURL(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return DefaultBaseURL
+	}
+	if !strings.Contains(s, "://") {
+		s = "http://" + s
+	}
+	return strings.TrimRight(s, "/")
 }
 
 // APIError is returned for non-2xx responses. Detail carries the server's

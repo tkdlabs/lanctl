@@ -175,7 +175,7 @@ Commands:
   help                                 show this help
 
 Global flags:
-  -s, --server URL   server base URL (env LANCTL_URL, default `+client.DefaultBaseURL+`)
+  -s, --server URL   server base URL; scheme optional (env LANCTL_URL, default `+client.DefaultBaseURL+`)
       --timeout DUR  non-streaming request timeout (default `+client.DefaultTimeout.String()+`)
   -o, --output FMT   table, json, or plain (default table)
   -q, --quiet        suppress status messages
