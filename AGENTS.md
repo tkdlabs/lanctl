@@ -55,6 +55,25 @@ make cover
 - Releases are cut by tagging `vX.Y.Z`; GitHub Actions cross-compiles and uploads
   the binaries.
 
+## Secrets & private infrastructure
+
+This repository is public. Real deployment details must never appear in tracked
+files, commit messages, issues, or pull requests.
+
+- Never include host names/FQDNs, IP or MAC addresses, SSH users or key paths,
+  VPN/NordVPN tokens or meshnet hostnames, unit/service names, deploy paths,
+  ports, or hardware details of real machines.
+- Use documentation placeholders in every example, test, issue, and commit:
+  RFC 5737 IPs (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`),
+  `example.com` / `*.local`, and generic names such as `desktop`, `nas`, `myapp`.
+- `hosts.yaml` and `.env` are gitignored and are the only place real inventory
+  belongs; keep secrets in them or in the environment, never in tracked files.
+- When fixing a live deployment, keep its hostnames, paths, and service names
+  out of issues and commit messages — describe the change generically and keep
+  the specifics in the private config.
+- If private details are found in a commit, issue, or comment, remove them and
+  report it; do not repeat them in the follow-up.
+
 ## Conventions
 
 - Go: `gofmt`, `go vet`, `go mod tidy`, standard module layout

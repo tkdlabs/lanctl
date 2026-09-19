@@ -14,8 +14,7 @@ machine down and the test process is killed mid-run.
 
 ## Steps to reproduce
 
-1. On a Linux host with `NOPASSWD: /usr/bin/shutdown` (e.g. `example-host` / `example.local`),
-   run `go test ./...`.
+1. On a Linux host whose sudoers grants passwordless `shutdown`, run `go test ./...`.
 2. The machine powers off/reboots during `internal/api` tests.
 
 ## Expected behaviour
