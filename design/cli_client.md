@@ -224,7 +224,7 @@ type VM struct {
   path, query, decoding, and `*APIError` mapping for 400/404/500.
 - `sse`: chunk-boundary and heartbeat cases.
 - `cmd/lanctl-cli`: parse/validation and table/plain/json rendering to buffers.
-- No test may reach a real host, service, or socket (per CLAUDE.md).
+- No test may reach a real host, service, or socket (per AGENTS.md).
 - Real end-to-end smoke test can live behind the `integration` build tag later.
 
 ## Build & release

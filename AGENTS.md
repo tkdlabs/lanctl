@@ -58,6 +58,8 @@ make cover
 ## Conventions
 
 - Go: `gofmt`, `go vet`, `go mod tidy`, standard module layout
+- File a GitHub issue (`gh issue create`) before starting any feature, bug fix,
+  or design; reference its number in the commit message (e.g. `... (#12)`)
 - Commit after the feature/fix is completed and verified, then `git push`
 - Work on a single bug or feature or design unless strictly necessary
 - Each commit corresponds to a single feature, bug fix, or design doc
