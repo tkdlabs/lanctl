@@ -43,6 +43,7 @@ hosts:
     mac: "AA:BB:CC:DD:EE:FF"
     ssh_user: tom
     services: [nginx, docker]
+    user_services: [myapp-backend]
 
   - name: nas                 # Proxmox host
     type: proxmox
@@ -55,12 +56,19 @@ hosts:
         ip: 192.168.0.200
         ssh_user: tom
         services: [lanctl.service]
+        user_services: [myapp.service]
 ```
 
 - `local: true` marks the machine running `lanctl` itself (skips SSH).
 - `mac` is required for Wake-on-LAN; `ip` is used for reachability checks.
 - `ssh_key` can be set globally or per host/VM (default `~/.ssh/id_ed25519`).
 - `nordvpn_token` enables the VPN repair action (or set per host).
+- `services` are system units (`systemctl`); `user_services` are systemd user
+  units (`systemctl --user`). For remote hosts these run in the SSH user's
+  user manager, so that user needs lingering enabled
+  (`loginctl enable-linger <user>`). For `local: true` hosts they run in the
+  lanctl process user's manager. Status, logs, and start/stop/restart all
+  respect the scope; logs are read with `journalctl --user`.
 
 See `hosts.example.yaml` for the full annotated schema.
 

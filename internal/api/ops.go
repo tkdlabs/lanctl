@@ -17,16 +17,16 @@ type operations interface {
 	CheckSSHPort(host string, timeout time.Duration) bool
 
 	Shutdown() error
-	ServiceStatuses(services []string) (map[string]string, error)
-	ServiceControl(service, action string) error
-	JournalLines(service string, n int) (string, error)
-	StreamJournal(service string, w http.ResponseWriter, r *http.Request)
+	ServiceStatuses(services []string, userScope bool) (map[string]string, error)
+	ServiceControl(service, action string, userScope bool) error
+	JournalLines(service string, n int, userScope bool) (string, error)
+	StreamJournal(service string, userScope bool, w http.ResponseWriter, r *http.Request)
 
 	SSHShutdown(ip, user, keyPath string) error
-	SSHServiceStatuses(ip, user, keyPath string, services []string) (map[string]string, error)
-	SSHServiceControl(ip, user, keyPath, service, action string) error
-	SSHJournalLines(ip, user, keyPath, service string, n int) (string, error)
-	SSHStreamJournal(ip, user, keyPath, service string, w http.ResponseWriter, r *http.Request)
+	SSHServiceStatuses(ip, user, keyPath string, services []string, userScope bool) (map[string]string, error)
+	SSHServiceControl(ip, user, keyPath, service, action string, userScope bool) error
+	SSHJournalLines(ip, user, keyPath, service string, n int, userScope bool) (string, error)
+	SSHStreamJournal(ip, user, keyPath, service string, userScope bool, w http.ResponseWriter, r *http.Request)
 	StreamVPNRepair(ip, user, keyPath, token string, w http.ResponseWriter, r *http.Request)
 }
 
@@ -47,40 +47,40 @@ func (realOperations) Shutdown() error {
 	return localops.Shutdown()
 }
 
-func (realOperations) ServiceStatuses(services []string) (map[string]string, error) {
-	return localops.ServiceStatuses(services)
+func (realOperations) ServiceStatuses(services []string, userScope bool) (map[string]string, error) {
+	return localops.ServiceStatuses(services, userScope)
 }
 
-func (realOperations) ServiceControl(service, action string) error {
-	return localops.ServiceControl(service, action)
+func (realOperations) ServiceControl(service, action string, userScope bool) error {
+	return localops.ServiceControl(service, action, userScope)
 }
 
-func (realOperations) JournalLines(service string, n int) (string, error) {
-	return localops.JournalLines(service, n)
+func (realOperations) JournalLines(service string, n int, userScope bool) (string, error) {
+	return localops.JournalLines(service, n, userScope)
 }
 
-func (realOperations) StreamJournal(service string, w http.ResponseWriter, r *http.Request) {
-	localops.StreamJournal(service, w, r)
+func (realOperations) StreamJournal(service string, userScope bool, w http.ResponseWriter, r *http.Request) {
+	localops.StreamJournal(service, userScope, w, r)
 }
 
 func (realOperations) SSHShutdown(ip, user, keyPath string) error {
 	return sshops.Shutdown(ip, user, keyPath)
 }
 
-func (realOperations) SSHServiceStatuses(ip, user, keyPath string, services []string) (map[string]string, error) {
-	return sshops.ServiceStatuses(ip, user, keyPath, services)
+func (realOperations) SSHServiceStatuses(ip, user, keyPath string, services []string, userScope bool) (map[string]string, error) {
+	return sshops.ServiceStatuses(ip, user, keyPath, services, userScope)
 }
 
-func (realOperations) SSHServiceControl(ip, user, keyPath, service, action string) error {
-	return sshops.ServiceControl(ip, user, keyPath, service, action)
+func (realOperations) SSHServiceControl(ip, user, keyPath, service, action string, userScope bool) error {
+	return sshops.ServiceControl(ip, user, keyPath, service, action, userScope)
 }
 
-func (realOperations) SSHJournalLines(ip, user, keyPath, service string, n int) (string, error) {
-	return sshops.JournalLines(ip, user, keyPath, service, n)
+func (realOperations) SSHJournalLines(ip, user, keyPath, service string, n int, userScope bool) (string, error) {
+	return sshops.JournalLines(ip, user, keyPath, service, n, userScope)
 }
 
-func (realOperations) SSHStreamJournal(ip, user, keyPath, service string, w http.ResponseWriter, r *http.Request) {
-	sshops.StreamJournal(ip, user, keyPath, service, w, r)
+func (realOperations) SSHStreamJournal(ip, user, keyPath, service string, userScope bool, w http.ResponseWriter, r *http.Request) {
+	sshops.StreamJournal(ip, user, keyPath, service, userScope, w, r)
 }
 
 func (realOperations) StreamVPNRepair(ip, user, keyPath, token string, w http.ResponseWriter, r *http.Request) {

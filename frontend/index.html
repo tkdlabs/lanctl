@@ -136,6 +136,18 @@
     }
     .svc-link:hover { color: #38bdf8; border-color: #38bdf8; }
 
+    .svc-scope {
+      font-size: 0.6rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #7dd3fc;
+      background: #0c1a2e;
+      border: 1px solid #1e4163;
+      border-radius: 3px;
+      padding: 0 0.25rem;
+    }
+
     .svc-controls { display: flex; gap: 0.25rem; }
 
     .btn-svc {
@@ -253,29 +265,44 @@
 
     // hostName = top-level host name (for API routes)
     // vmName   = VM name, or null for flat hosts
-    // entity   = the host or VM object (has .online, .services, .service_statuses)
+    // entity   = the host or VM object (has .online, .services, .user_services,
+    //            .service_statuses)
     function renderServicesHtml(hostName, vmName, entity) {
-      if (!entity.services?.length) return '<span style="color:#1e293b">—</span>';
+      const groups = [
+        { services: entity.services || [], userScope: false },
+        { services: entity.user_services || [], userScope: true },
+      ];
+      if (!groups[0].services.length && !groups[1].services.length) {
+        return '<span style="color:#1e293b">—</span>';
+      }
       const statuses = entity.service_statuses || {};
-      return entity.services.map(s => {
-        const status = statuses[s] || (entity.online ? 'unknown' : '');
-        const dotCls = entity.online ? svcDotClass(status) : 'unknown';
-        const statusTitle = entity.online ? (status || 'unknown') : 'host offline';
-        const disabled = entity.online ? '' : 'disabled';
-        const logHref = vmName
-          ? `/log?host=${encodeURIComponent(hostName)}&vm=${encodeURIComponent(vmName)}&service=${encodeURIComponent(s)}`
-          : `/log?host=${encodeURIComponent(hostName)}&service=${encodeURIComponent(s)}`;
-        const vmAttr = vmName ? `data-vm="${esc(vmName)}"` : '';
-        return `<div class="svc-entry">
+      const items = [];
+      for (const group of groups) {
+        for (const s of group.services) {
+          const status = statuses[s] || (entity.online ? 'unknown' : '');
+          const dotCls = entity.online ? svcDotClass(status) : 'unknown';
+          const statusTitle = entity.online ? (status || 'unknown') : 'host offline';
+          const disabled = entity.online ? '' : 'disabled';
+          const logHref = vmName
+            ? `/log?host=${encodeURIComponent(hostName)}&vm=${encodeURIComponent(vmName)}&service=${encodeURIComponent(s)}`
+            : `/log?host=${encodeURIComponent(hostName)}&service=${encodeURIComponent(s)}`;
+          const vmAttr = vmName ? `data-vm="${esc(vmName)}"` : '';
+          const scopeTag = group.userScope
+            ? '<span class="svc-scope" title="systemd user service">user</span>'
+            : '';
+          items.push(`<div class="svc-entry">
           <span class="svc-dot ${dotCls}" title="${esc(statusTitle)}"></span>
           <a class="svc-link" href="${logHref}" target="_blank" rel="noopener">${esc(svcShortName(s))}</a>
+          ${scopeTag}
           <div class="svc-controls">
             <button class="btn-svc" data-host="${esc(hostName)}" ${vmAttr} data-service="${esc(s)}" data-svc-action="start" ${disabled} title="Start">▶</button>
             <button class="btn-svc" data-host="${esc(hostName)}" ${vmAttr} data-service="${esc(s)}" data-svc-action="stop" ${disabled} title="Stop">■</button>
             <button class="btn-svc" data-host="${esc(hostName)}" ${vmAttr} data-service="${esc(s)}" data-svc-action="restart" ${disabled} title="Restart">↺</button>
           </div>
-        </div>`;
-      }).join('');
+        </div>`);
+        }
+      }
+      return items.join('');
     }
 
     function renderHosts(hosts) {

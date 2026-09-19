@@ -24,6 +24,50 @@ var runSudo = func(name string, args ...string) ([]byte, error) {
 	return exec.Command("sudo", append([]string{name}, args...)...).CombinedOutput()
 }
 
+// runUser executes a command as the current user with an environment that can
+// reach the systemd user manager (XDG_RUNTIME_DIR is absent when lanctl runs
+// as a system service). It is a package variable so tests can substitute a fake.
+var runUser = func(name string, args ...string) ([]byte, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Env = runtimeDirEnv()
+	return cmd.Output()
+}
+
+// runtimeDirEnv returns the current environment with XDG_RUNTIME_DIR defaulted
+// to the current user's runtime directory when it is not already set.
+func runtimeDirEnv() []string {
+	env := os.Environ()
+	for _, e := range env {
+		if strings.HasPrefix(e, "XDG_RUNTIME_DIR=") {
+			return env
+		}
+	}
+	return append(env, fmt.Sprintf("XDG_RUNTIME_DIR=/run/user/%d", os.Getuid()))
+}
+
+// systemctlArgs builds `systemctl [--user] <verb> <services...>`.
+func systemctlArgs(userScope bool, verb string, services ...string) []string {
+	args := make([]string, 0, len(services)+2)
+	if userScope {
+		args = append(args, "--user")
+	}
+	args = append(args, verb)
+	return append(args, services...)
+}
+
+// journalctlArgs builds `journalctl [--user] -u <service> [-f] -n N ...`.
+func journalctlArgs(userScope bool, service string, n int, follow bool) []string {
+	args := make([]string, 0, 8)
+	if userScope {
+		args = append(args, "--user")
+	}
+	args = append(args, "-u", service)
+	if follow {
+		args = append(args, "-f")
+	}
+	return append(args, "-n", fmt.Sprintf("%d", n), "--no-pager", "--output=short-iso")
+}
+
 // Shutdown runs `sudo shutdown -h now` locally.
 //
 // It refuses to run unless LANCTL_ALLOW_SHUTDOWN=1 is set. This prevents
@@ -36,11 +80,17 @@ func Shutdown() error {
 	return err
 }
 
-// ServiceStatuses runs `systemctl is-active` for each service and returns a map.
-// systemctl exits non-zero when any service is inactive, so we ignore the error.
-func ServiceStatuses(services []string) (map[string]string, error) {
-	args := append([]string{"is-active"}, services...)
-	out, _ := run("systemctl", args...)
+// ServiceStatuses runs `systemctl [--user] is-active` for each service and
+// returns a map. systemctl exits non-zero when any service is inactive, so we
+// ignore the error.
+func ServiceStatuses(services []string, userScope bool) (map[string]string, error) {
+	args := systemctlArgs(userScope, "is-active", services...)
+	var out []byte
+	if userScope {
+		out, _ = runUser("systemctl", args...)
+	} else {
+		out, _ = run("systemctl", args...)
+	}
 	return parseStatusOutput(string(out), services), nil
 }
 
@@ -59,9 +109,18 @@ func parseStatusOutput(out string, services []string) map[string]string {
 	return statuses
 }
 
-// ServiceControl runs `sudo systemctl <action> <service>` locally.
-func ServiceControl(service, action string) error {
-	out, err := runSudo("systemctl", action, service)
+// ServiceControl runs `sudo systemctl <action> <service>` for system services
+// and `systemctl --user <action> <service>` for user services (no elevation:
+// user-scoped units are owned by the lanctl process user).
+func ServiceControl(service, action string, userScope bool) error {
+	args := systemctlArgs(userScope, action, service)
+	var out []byte
+	var err error
+	if userScope {
+		out, err = runUser("systemctl", args...)
+	} else {
+		out, err = runSudo("systemctl", args...)
+	}
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if msg == "" {
@@ -73,8 +132,15 @@ func ServiceControl(service, action string) error {
 }
 
 // JournalLines returns the last n lines of a service's journal.
-func JournalLines(service string, n int) (string, error) {
-	out, err := run("journalctl", "-u", service, "-n", fmt.Sprintf("%d", n), "--no-pager", "--output=short-iso")
+func JournalLines(service string, n int, userScope bool) (string, error) {
+	args := journalctlArgs(userScope, service, n, false)
+	var out []byte
+	var err error
+	if userScope {
+		out, err = runUser("journalctl", args...)
+	} else {
+		out, err = run("journalctl", args...)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -88,13 +154,17 @@ var streamCmd = func(ctx context.Context, name string, args ...string) *exec.Cmd
 }
 
 // StreamJournal streams journalctl -f output to w via SSE until r.Context() is done.
-func StreamJournal(service string, w http.ResponseWriter, r *http.Request) {
+func StreamJournal(service string, userScope bool, w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return
 	}
 
-	cmd := streamCmd(r.Context(), "journalctl", "-u", service, "-f", "-n", "50", "--no-pager", "--output=short-iso")
+	args := journalctlArgs(userScope, service, 50, true)
+	cmd := streamCmd(r.Context(), "journalctl", args...)
+	if userScope {
+		cmd.Env = runtimeDirEnv()
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		fmt.Fprintf(w, "data: [error: %v]\n\n", err)

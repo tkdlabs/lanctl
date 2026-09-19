@@ -461,11 +461,18 @@ func TestFormatHelpers(t *testing.T) {
 	if got := typeLabel(""); got != "standard" {
 		t.Errorf("typeLabel(\"\") = %q", got)
 	}
-	if got := formatServices(nil, nil); got != "-" {
+	if got := formatServices(nil, nil, nil); got != "-" {
 		t.Errorf("formatServices(nil) = %q", got)
 	}
-	if got := formatServices([]string{"a", "b"}, map[string]string{"a": "active"}); got != "a=active,b" {
+	if got := formatServices([]string{"a", "b"}, nil, map[string]string{"a": "active"}); got != "a=active,b" {
 		t.Errorf("formatServices = %q", got)
+	}
+	userSvcs := []string{"myapp"}
+	if got := formatServices([]string{"a"}, userSvcs, map[string]string{"myapp": "active"}); got != "a,myapp(user)=active" {
+		t.Errorf("formatServices with user service = %q", got)
+	}
+	if got := formatServices(nil, []string{"myapp"}, nil); got != "myapp(user)" {
+		t.Errorf("formatServices user only = %q", got)
 	}
 	name := "vpn.example"
 	yes := true

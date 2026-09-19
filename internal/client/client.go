@@ -92,6 +92,7 @@ type VM struct {
 	IP              string            `json:"ip"`
 	Online          bool              `json:"online"`
 	Services        []string          `json:"services"`
+	UserServices    []string          `json:"user_services"`
 	ServiceStatuses map[string]string `json:"service_statuses"`
 	VPNHostname     *string           `json:"vpn_hostname"`
 	VPNReachable    *bool             `json:"vpn_reachable"`
@@ -106,6 +107,7 @@ type Host struct {
 	Online          bool              `json:"online"`
 	Local           bool              `json:"local"`
 	Services        []string          `json:"services"`
+	UserServices    []string          `json:"user_services"`
 	ServiceStatuses map[string]string `json:"service_statuses"`
 	VPNHostname     *string           `json:"vpn_hostname"`
 	VPNReachable    *bool             `json:"vpn_reachable"`

@@ -54,14 +54,59 @@ func runCmd(client *ssh.Client, cmd string) (string, int, error) {
 	return string(out), 0, nil
 }
 
+// remoteUserEnv is prepended to commands that talk to the SSH user's systemd
+// instance. Non-interactive SSH sessions have no XDG_RUNTIME_DIR, so the user
+// manager's private socket cannot be found without it. Requires lingering
+// (`loginctl enable-linger <user>`) or an active session on the remote host.
+const remoteUserEnv = "XDG_RUNTIME_DIR=/run/user/$(id -u) "
+
+// systemctlCommand builds the remote shell command for `systemctl [--user]
+// <action> <services...>`.
+func systemctlCommand(userScope bool, action string, services ...string) string {
+	cmd := "systemctl "
+	if userScope {
+		cmd = remoteUserEnv + "systemctl --user "
+	}
+	return cmd + action + " " + strings.Join(services, " ")
+}
+
+// serviceControlCommand builds the remote shell command for a service action.
+// System services are controlled via sudo; the SSH user owns its own user-scoped
+// units, so those are controlled without elevation.
+func serviceControlCommand(userScope bool, service, action string) string {
+	if userScope {
+		return remoteUserEnv + "systemctl --user " + action + " " + service
+	}
+	return "sudo systemctl " + action + " " + service
+}
+
+// journalctlCommand builds the remote shell command for
+// `journalctl [--user] -u <service> [-f] -n N ...`.
+func journalctlCommand(userScope bool, service string, n int, follow bool) string {
+	var b strings.Builder
+	if userScope {
+		b.WriteString(remoteUserEnv)
+	}
+	b.WriteString("journalctl ")
+	if userScope {
+		b.WriteString("--user ")
+	}
+	b.WriteString("-u " + service + " ")
+	if follow {
+		b.WriteString("-f ")
+	}
+	fmt.Fprintf(&b, "-n %d --no-pager --output=short-iso", n)
+	return b.String()
+}
+
 // ── Public API — all use DefaultPool ─────────────────────────────────────────
 
-// ServiceStatuses runs `systemctl is-active <services...>` and returns a map.
-// The underlying SSH connection is reused from the pool.
-func ServiceStatuses(ip, user, keyPath string, services []string) (map[string]string, error) {
+// ServiceStatuses runs `systemctl [--user] is-active <services...>` and returns
+// a map. The underlying SSH connection is reused from the pool.
+func ServiceStatuses(ip, user, keyPath string, services []string, userScope bool) (map[string]string, error) {
 	var result map[string]string
 	err := DefaultPool.withClient(ip, user, keyPath, func(c *ssh.Client) error {
-		cmd := "systemctl is-active " + strings.Join(services, " ")
+		cmd := systemctlCommand(userScope, "is-active", services...)
 		out, _, err := runCmd(c, cmd)
 		if err != nil {
 			return err
@@ -81,10 +126,12 @@ func ServiceStatuses(ip, user, keyPath string, services []string) (map[string]st
 	return result, err
 }
 
-// ServiceControl runs `sudo systemctl <action> <service>` via a pooled connection.
-func ServiceControl(ip, user, keyPath, service, action string) error {
+// ServiceControl runs `sudo systemctl <action> <service>` for system services
+// and `systemctl --user <action> <service>` for user services, via a pooled
+// connection.
+func ServiceControl(ip, user, keyPath, service, action string, userScope bool) error {
 	return DefaultPool.withClient(ip, user, keyPath, func(c *ssh.Client) error {
-		out, exitCode, err := runCmd(c, fmt.Sprintf("sudo systemctl %s %s", action, service))
+		out, exitCode, err := runCmd(c, serviceControlCommand(userScope, service, action))
 		if err != nil {
 			return err
 		}
@@ -119,10 +166,10 @@ func Shutdown(ip, user, keyPath string) error {
 }
 
 // JournalLines fetches the last n lines of a service's journal via a pooled connection.
-func JournalLines(ip, user, keyPath, service string, n int) (string, error) {
+func JournalLines(ip, user, keyPath, service string, n int, userScope bool) (string, error) {
 	var result string
 	err := DefaultPool.withClient(ip, user, keyPath, func(c *ssh.Client) error {
-		cmd := fmt.Sprintf("journalctl -u %s -n %d --no-pager --output=short-iso", service, n)
+		cmd := journalctlCommand(userScope, service, n, false)
 		out, _, err := runCmd(c, cmd)
 		if err != nil {
 			return err
@@ -135,7 +182,7 @@ func JournalLines(ip, user, keyPath, service string, n int) (string, error) {
 
 // StreamJournal streams journalctl -f for a service via SSE over a pooled SSH connection.
 // Sends a heartbeat comment every 15 s to prevent proxy timeouts.
-func StreamJournal(ip, user, keyPath, service string, w http.ResponseWriter, r *http.Request) {
+func StreamJournal(ip, user, keyPath, service string, userScope bool, w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return
@@ -156,7 +203,7 @@ func StreamJournal(ip, user, keyPath, service string, w http.ResponseWriter, r *
 		return
 	}
 
-	cmd := fmt.Sprintf("journalctl -u %s -f -n 50 --no-pager --output=short-iso", service)
+	cmd := journalctlCommand(userScope, service, 50, true)
 	if err := session.Start(cmd); err != nil {
 		fmt.Fprintf(w, "data: [error] %v\n\n", err)
 		flusher.Flush()

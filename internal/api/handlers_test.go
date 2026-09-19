@@ -26,6 +26,9 @@ type fakeOps struct {
 	sshJournalErr     error
 
 	shutdownCalls int
+
+	// userScope records the scope passed to each service call, in order.
+	userScope []bool
 }
 
 func (f *fakeOps) SendMagicPacket(mac, broadcast string, port int) error {
@@ -42,36 +45,60 @@ func (f *fakeOps) Shutdown() error {
 	return f.shutdownErr
 }
 
-func (f *fakeOps) ServiceStatuses(services []string) (map[string]string, error) {
+func (f *fakeOps) ServiceStatuses(services []string, userScope bool) (map[string]string, error) {
+	f.userScope = append(f.userScope, userScope)
 	return statusMap(services), nil
 }
 
-func (f *fakeOps) ServiceControl(service, action string) error { return f.serviceControlErr }
+func (f *fakeOps) ServiceControl(service, action string, userScope bool) error {
+	f.userScope = append(f.userScope, userScope)
+	return f.serviceControlErr
+}
 
-func (f *fakeOps) JournalLines(service string, n int) (string, error) {
+func (f *fakeOps) JournalLines(service string, n int, userScope bool) (string, error) {
+	f.userScope = append(f.userScope, userScope)
 	return f.journalLinesOut, f.journalLinesErr
 }
 
-func (f *fakeOps) StreamJournal(service string, w http.ResponseWriter, r *http.Request) {}
+func (f *fakeOps) StreamJournal(service string, userScope bool, w http.ResponseWriter, r *http.Request) {
+	f.userScope = append(f.userScope, userScope)
+}
 
 func (f *fakeOps) SSHShutdown(ip, user, keyPath string) error { return f.sshShutdownErr }
 
-func (f *fakeOps) SSHServiceStatuses(ip, user, keyPath string, services []string) (map[string]string, error) {
+func (f *fakeOps) SSHServiceStatuses(ip, user, keyPath string, services []string, userScope bool) (map[string]string, error) {
+	f.userScope = append(f.userScope, userScope)
 	return statusMap(services), nil
 }
 
-func (f *fakeOps) SSHServiceControl(ip, user, keyPath, service, action string) error {
+func (f *fakeOps) SSHServiceControl(ip, user, keyPath, service, action string, userScope bool) error {
+	f.userScope = append(f.userScope, userScope)
 	return f.sshServiceCtlErr
 }
 
-func (f *fakeOps) SSHJournalLines(ip, user, keyPath, service string, n int) (string, error) {
+func (f *fakeOps) SSHJournalLines(ip, user, keyPath, service string, n int, userScope bool) (string, error) {
+	f.userScope = append(f.userScope, userScope)
 	return f.journalLinesOut, f.sshJournalErr
 }
 
-func (f *fakeOps) SSHStreamJournal(ip, user, keyPath, service string, w http.ResponseWriter, r *http.Request) {
+func (f *fakeOps) SSHStreamJournal(ip, user, keyPath, service string, userScope bool, w http.ResponseWriter, r *http.Request) {
+	f.userScope = append(f.userScope, userScope)
 }
 
 func (f *fakeOps) StreamVPNRepair(ip, user, keyPath, token string, w http.ResponseWriter, r *http.Request) {
+}
+
+// scopesSeen returns true if the recorded user-scope flags match want.
+func (f *fakeOps) scopesSeen(want ...bool) bool {
+	if len(f.userScope) != len(want) {
+		return false
+	}
+	for i, w := range want {
+		if f.userScope[i] != w {
+			return false
+		}
+	}
+	return true
 }
 
 func statusMap(services []string) map[string]string {
@@ -644,6 +671,144 @@ func TestServiceControl_LocalHost(t *testing.T) {
 	rr := doRequest(t, "POST", "/api/hosts/local/services/definitely-nonexistent-lanctl-test-svc/stop")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// ── User-service tests (systemd --user scope) ────────────────────────────────
+
+const userServiceHostConfig = `
+hosts:
+  - name: desktop
+    ip: 192.168.1.1
+    mac: "aa:bb:cc:dd:ee:ff"
+    ssh_user: tom
+    services: [nginx]
+    user_services: [myapp-backend]
+`
+
+func TestGetHosts_UserServices(t *testing.T) {
+	f := useFakeOps(t)
+	f.checkSSHPort = true
+	writeConfig(t, userServiceHostConfig)
+	rr := doRequest(t, "GET", "/api/hosts")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var result []map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	userSvcs, ok := result[0]["user_services"].([]any)
+	if !ok || len(userSvcs) != 1 || userSvcs[0] != "myapp-backend" {
+		t.Fatalf("user_services = %v, want [myapp-backend]", result[0]["user_services"])
+	}
+	statuses, ok := result[0]["service_statuses"].(map[string]any)
+	if !ok || statuses["nginx"] != "active" || statuses["myapp-backend"] != "active" {
+		t.Errorf("service_statuses = %v, want both active", result[0]["service_statuses"])
+	}
+	if !f.scopesSeen(false, true) {
+		t.Errorf("expected system then user scope, got %v", f.userScope)
+	}
+}
+
+func TestServiceControl_UserService(t *testing.T) {
+	f := useFakeOps(t)
+	writeConfig(t, userServiceHostConfig)
+	rr := doRequest(t, "POST", "/api/hosts/desktop/services/myapp-backend/restart")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !f.scopesSeen(true) {
+		t.Errorf("expected user scope, got %v", f.userScope)
+	}
+}
+
+func TestGetLogs_UserService(t *testing.T) {
+	f := useFakeOps(t)
+	f.journalLinesOut = "hello\n"
+	writeConfig(t, userServiceHostConfig)
+	rr := doRequest(t, "GET", "/api/hosts/desktop/services/myapp-backend/logs")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !f.scopesSeen(true) {
+		t.Errorf("expected user scope, got %v", f.userScope)
+	}
+}
+
+func TestStreamLogs_UserService(t *testing.T) {
+	f := useFakeOps(t)
+	writeConfig(t, userServiceHostConfig)
+	rr := doRequest(t, "GET", "/api/hosts/desktop/services/myapp-backend/logs/stream")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if !f.scopesSeen(true) {
+		t.Errorf("expected user scope, got %v", f.userScope)
+	}
+}
+
+const userServiceVMConfig = `
+hosts:
+  - name: pve
+    type: proxmox
+    ip: 1.2.3.4
+    mac: "aa:bb:cc:dd:ee:ff"
+    ssh_user: root
+    vms:
+      - name: vm1
+        ip: 192.168.1.10
+        ssh_user: tom
+        services: [nginx]
+        user_services: [myapp.service]
+`
+
+func TestGetHosts_VMUserServices(t *testing.T) {
+	f := useFakeOps(t)
+	f.checkSSHPort = true
+	writeConfig(t, userServiceVMConfig)
+	rr := doRequest(t, "GET", "/api/hosts")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var result []map[string]any
+	json.Unmarshal(rr.Body.Bytes(), &result)
+	vms, ok := result[0]["vms"].([]any)
+	if !ok || len(vms) != 1 {
+		t.Fatalf("vms = %v", result[0]["vms"])
+	}
+	vm := vms[0].(map[string]any)
+	userSvcs, ok := vm["user_services"].([]any)
+	if !ok || len(userSvcs) != 1 || userSvcs[0] != "myapp.service" {
+		t.Fatalf("vm user_services = %v", vm["user_services"])
+	}
+	if !f.scopesSeen(false, true) {
+		t.Errorf("expected system then user scope, got %v", f.userScope)
+	}
+}
+
+func TestVMServiceControl_UserService(t *testing.T) {
+	f := useFakeOps(t)
+	writeConfig(t, userServiceVMConfig)
+	rr := doRequest(t, "POST", "/api/hosts/pve/vms/vm1/services/myapp.service/start")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !f.scopesSeen(true) {
+		t.Errorf("expected user scope, got %v", f.userScope)
+	}
+}
+
+func TestVMGetLogs_UserService(t *testing.T) {
+	f := useFakeOps(t)
+	f.journalLinesOut = "hello\n"
+	writeConfig(t, userServiceVMConfig)
+	rr := doRequest(t, "GET", "/api/hosts/pve/vms/vm1/services/myapp.service/logs")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !f.scopesSeen(true) {
+		t.Errorf("expected user scope, got %v", f.userScope)
 	}
 }
 

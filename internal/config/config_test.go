@@ -19,6 +19,8 @@ hosts:
     ssh_user: tom
     services:
       - nginx
+    user_services:
+      - myapp-backend
   - name: self
     ip: 192.168.0.236
     mac: "11:22:33:44:55:66"
@@ -57,6 +59,9 @@ hosts:
 	if len(h0.Services) != 1 || h0.Services[0] != "nginx" {
 		t.Errorf("Hosts[0].Services = %v, want [nginx]", h0.Services)
 	}
+	if len(h0.UserServices) != 1 || h0.UserServices[0] != "myapp-backend" {
+		t.Errorf("Hosts[0].UserServices = %v, want [myapp-backend]", h0.UserServices)
+	}
 
 	h1 := cfg.Hosts[1]
 	if !h1.Local {
@@ -80,7 +85,9 @@ hosts:
         ip: 192.168.0.200
         ssh_user: tom
         services:
-          - lanctl-backend.service`
+          - lanctl-backend.service
+        user_services:
+          - myapp.service`
 
 	cfgPath := filepath.Join(dir, "hosts.yaml")
 	if err := os.WriteFile(cfgPath, []byte(yamlData), 0644); err != nil {
@@ -107,6 +114,9 @@ hosts:
 	}
 	if vm.VMID != 100 {
 		t.Errorf("VM.VMID = %d, want 100", vm.VMID)
+	}
+	if len(vm.UserServices) != 1 || vm.UserServices[0] != "myapp.service" {
+		t.Errorf("VM.UserServices = %v, want [myapp.service]", vm.UserServices)
 	}
 }
 
@@ -241,33 +251,59 @@ func TestResolveVMSSHKey_Cascade(t *testing.T) {
 	}
 }
 
-func TestValidateService(t *testing.T) {
+func TestFindService(t *testing.T) {
 	host := Host{
-		Services: []string{"nginx", "docker"},
+		Services:     []string{"nginx", "docker"},
+		UserServices: []string{"myapp-backend"},
 	}
 
-	if !ValidateService(host, "nginx") {
-		t.Error("expected nginx to be valid")
+	scope, ok := FindService(host, "nginx")
+	if !ok || scope != ScopeSystem {
+		t.Errorf("nginx: got (%q, %v), want (system, true)", scope, ok)
 	}
-	if ValidateService(host, "redis") {
+
+	scope, ok = FindService(host, "myapp-backend")
+	if !ok || scope != ScopeUser {
+		t.Errorf("myapp-backend: got (%q, %v), want (user, true)", scope, ok)
+	}
+
+	if _, ok := FindService(host, "redis"); ok {
 		t.Error("expected redis to be invalid")
 	}
 
-	empty := Host{}
-	if ValidateService(empty, "anything") {
+	if _, ok := FindService(Host{}, "anything"); ok {
 		t.Error("expected service to be invalid on empty host")
 	}
 }
 
-func TestValidateVMService(t *testing.T) {
+func TestFindService_UserTakesPrecedence(t *testing.T) {
+	host := Host{
+		Services:     []string{"mydaemon"},
+		UserServices: []string{"mydaemon"},
+	}
+	scope, ok := FindService(host, "mydaemon")
+	if !ok || scope != ScopeUser {
+		t.Errorf("got (%q, %v), want (user, true)", scope, ok)
+	}
+}
+
+func TestFindVMService(t *testing.T) {
 	vm := VM{
-		Services: []string{"lanctl.service"},
+		Services:     []string{"lanctl.service"},
+		UserServices: []string{"myapp.service"},
 	}
 
-	if !ValidateVMService(vm, "lanctl.service") {
-		t.Error("expected lanctl.service to be valid")
+	scope, ok := FindVMService(vm, "lanctl.service")
+	if !ok || scope != ScopeSystem {
+		t.Errorf("lanctl.service: got (%q, %v), want (system, true)", scope, ok)
 	}
-	if ValidateVMService(vm, "other") {
+
+	scope, ok = FindVMService(vm, "myapp.service")
+	if !ok || scope != ScopeUser {
+		t.Errorf("myapp.service: got (%q, %v), want (user, true)", scope, ok)
+	}
+
+	if _, ok := FindVMService(vm, "other"); ok {
 		t.Error("expected other to be invalid")
 	}
 }

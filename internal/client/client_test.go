@@ -122,12 +122,13 @@ func TestHosts_DecodesHostsAndVMs(t *testing.T) {
 			"service_statuses":{},"vpn_hostname":null,"vpn_reachable":null,
 			"vms":[
 				{"name":"main","vmid":100,"ip":"192.168.0.200","online":false,
-				 "services":["nginx"],"service_statuses":{"nginx":"active"},
+				 "services":["nginx"],"user_services":["myapp"],"service_statuses":{"nginx":"active","myapp":"inactive"},
 				 "vpn_hostname":"vpn.example","vpn_reachable":true}
 			]
 		},
 		{"name":"desktop","ip":"192.168.0.100","mac":"AA:BB:CC:DD:EE:FF","online":true,
-		 "local":true,"services":["nginx"],"service_statuses":{"nginx":"active"},
+		 "local":true,"services":["nginx"],"user_services":["myapp"],
+		 "service_statuses":{"nginx":"active","myapp":"inactive"},
 		 "vpn_hostname":null,"vpn_reachable":null}
 	]`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -156,8 +157,14 @@ func TestHosts_DecodesHostsAndVMs(t *testing.T) {
 	if vm.VPNReachable == nil || !*vm.VPNReachable {
 		t.Errorf("vm.VPNReachable = %v, want true", vm.VPNReachable)
 	}
+	if len(vm.UserServices) != 1 || vm.UserServices[0] != "myapp" {
+		t.Errorf("vm.UserServices = %v, want [myapp]", vm.UserServices)
+	}
 	if hosts[1].VPNHostname != nil {
 		t.Errorf("desktop.VPNHostname = %v, want nil", hosts[1].VPNHostname)
+	}
+	if len(hosts[1].UserServices) != 1 || hosts[1].UserServices[0] != "myapp" {
+		t.Errorf("desktop.UserServices = %v, want [myapp]", hosts[1].UserServices)
 	}
 }
 

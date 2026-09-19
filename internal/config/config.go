@@ -20,30 +20,43 @@ type Config struct {
 
 // Host represents a single host entry. A Proxmox host has VMs nested under it.
 type Host struct {
-	Name        string   `yaml:"name"`
-	Type        string   `yaml:"type,omitempty"`
-	IP          string   `yaml:"ip"`
-	MAC         string   `yaml:"mac"`
-	SSHUser     string   `yaml:"ssh_user,omitempty"`
-	SSHKey      string   `yaml:"ssh_key,omitempty"`
-	Broadcast   string   `yaml:"broadcast,omitempty"`
-	NordVPNHost string   `yaml:"nordvpn_hostname,omitempty"`
-	Local       bool     `yaml:"local,omitempty"`
-	Services    []string `yaml:"services,omitempty"`
-	VMs         []VM     `yaml:"vms,omitempty"`
+	Name         string   `yaml:"name"`
+	Type         string   `yaml:"type,omitempty"`
+	IP           string   `yaml:"ip"`
+	MAC          string   `yaml:"mac"`
+	SSHUser      string   `yaml:"ssh_user,omitempty"`
+	SSHKey       string   `yaml:"ssh_key,omitempty"`
+	Broadcast    string   `yaml:"broadcast,omitempty"`
+	NordVPNHost  string   `yaml:"nordvpn_hostname,omitempty"`
+	Local        bool     `yaml:"local,omitempty"`
+	Services     []string `yaml:"services,omitempty"`
+	UserServices []string `yaml:"user_services,omitempty"`
+	VMs          []VM     `yaml:"vms,omitempty"`
 }
 
 // VM represents a virtual machine under a Proxmox host.
 type VM struct {
-	Name        string   `yaml:"name"`
-	VMID        int      `yaml:"vmid,omitempty"`
-	IP          string   `yaml:"ip"`
-	SSHUser     string   `yaml:"ssh_user,omitempty"`
-	SSHKey      string   `yaml:"ssh_key,omitempty"`
-	NordVPNHost string   `yaml:"nordvpn_hostname,omitempty"`
-	Local       bool     `yaml:"local,omitempty"`
-	Services    []string `yaml:"services,omitempty"`
+	Name         string   `yaml:"name"`
+	VMID         int      `yaml:"vmid,omitempty"`
+	IP           string   `yaml:"ip"`
+	SSHUser      string   `yaml:"ssh_user,omitempty"`
+	SSHKey       string   `yaml:"ssh_key,omitempty"`
+	NordVPNHost  string   `yaml:"nordvpn_hostname,omitempty"`
+	Local        bool     `yaml:"local,omitempty"`
+	Services     []string `yaml:"services,omitempty"`
+	UserServices []string `yaml:"user_services,omitempty"`
 }
+
+// ServiceScope identifies the systemd instance that owns a configured service.
+type ServiceScope string
+
+const (
+	// ScopeSystem is the system-wide systemd instance (systemctl).
+	ScopeSystem ServiceScope = "system"
+	// ScopeUser is a systemd user instance: that of the SSH user on remote
+	// hosts, or of the lanctl process user on local hosts (systemctl --user).
+	ScopeUser ServiceScope = "user"
+)
 
 // Load reads and parses the hosts.yaml config file.
 //
@@ -148,24 +161,30 @@ func ResolveVMSSHKey(cfg Config, host Host, vm VM) string {
 	return defaultSSHKey
 }
 
-// ValidateService checks if the service name exists in the host's service list.
-func ValidateService(host Host, serviceName string) bool {
-	for _, svc := range host.Services {
-		if svc == serviceName {
-			return true
-		}
-	}
-	return false
+// FindService resolves a host's configured service name to its systemd scope.
+// user_services take precedence over services so the same name can be moved
+// between scopes without ambiguity.
+func FindService(host Host, serviceName string) (ServiceScope, bool) {
+	return findService(host.Services, host.UserServices, serviceName)
 }
 
-// ValidateVMService checks if the service name exists in the VM's service list.
-func ValidateVMService(vm VM, serviceName string) bool {
-	for _, svc := range vm.Services {
+// FindVMService resolves a VM's configured service name to its systemd scope.
+func FindVMService(vm VM, serviceName string) (ServiceScope, bool) {
+	return findService(vm.Services, vm.UserServices, serviceName)
+}
+
+func findService(services, userServices []string, serviceName string) (ServiceScope, bool) {
+	for _, svc := range userServices {
 		if svc == serviceName {
-			return true
+			return ScopeUser, true
 		}
 	}
-	return false
+	for _, svc := range services {
+		if svc == serviceName {
+			return ScopeSystem, true
+		}
+	}
+	return "", false
 }
 
 // expandTilde replaces a leading ~ with the user's home directory.

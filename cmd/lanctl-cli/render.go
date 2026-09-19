@@ -61,7 +61,7 @@ func renderHostsPlain(w io.Writer, hosts []client.Host) {
 					"vm",
 					vm.IP,
 					onlineLabel(vm.Online),
-					formatServices(vm.Services, vm.ServiceStatuses),
+					formatServices(vm.Services, vm.UserServices, vm.ServiceStatuses),
 					formatVPN(vm.VPNHostname, vm.VPNReachable),
 				}
 				fmt.Fprintln(w, strings.Join(row, "\t"))
@@ -76,7 +76,7 @@ func hostRow(h client.Host) []string {
 		typeLabel(h.Type),
 		h.IP,
 		onlineLabel(h.Online),
-		formatServices(h.Services, h.ServiceStatuses),
+		formatServices(h.Services, h.UserServices, h.ServiceStatuses),
 		formatVPN(h.VPNHostname, h.VPNReachable),
 	}
 }
@@ -87,7 +87,7 @@ func vmRow(vm client.VM) []string {
 		"vm",
 		vm.IP,
 		onlineLabel(vm.Online),
-		formatServices(vm.Services, vm.ServiceStatuses),
+		formatServices(vm.Services, vm.UserServices, vm.ServiceStatuses),
 		formatVPN(vm.VPNHostname, vm.VPNReachable),
 	}
 }
@@ -165,17 +165,29 @@ func onlineLabel(online bool) string {
 	return "offline"
 }
 
-func formatServices(services []string, statuses map[string]string) string {
-	if len(services) == 0 {
+// formatServices renders system and user services as a comma-separated list.
+// User services are suffixed with "(user)" so the scope is visible in both the
+// table and plain output.
+func formatServices(services, userServices []string, statuses map[string]string) string {
+	if len(services) == 0 && len(userServices) == 0 {
 		return "-"
 	}
-	parts := make([]string, 0, len(services))
-	for _, s := range services {
-		if st := statuses[s]; st != "" {
-			parts = append(parts, s+"="+st)
-		} else {
-			parts = append(parts, s)
+	parts := make([]string, 0, len(services)+len(userServices))
+	appendSvc := func(s string, userScope bool) {
+		label := s
+		if userScope {
+			label += "(user)"
 		}
+		if st := statuses[s]; st != "" {
+			label += "=" + st
+		}
+		parts = append(parts, label)
+	}
+	for _, s := range services {
+		appendSvc(s, false)
+	}
+	for _, s := range userServices {
+		appendSvc(s, true)
 	}
 	return strings.Join(parts, ",")
 }

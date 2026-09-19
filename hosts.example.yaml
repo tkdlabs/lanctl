@@ -19,6 +19,8 @@ hosts:
     local: true
     services:
       - lanctl-backend
+    # user_services:                 # systemd --user units of the lanctl
+    #   - myapp-backend              # process user (systemctl --user)
 
   - name: desktop
     ip: 192.168.0.100
@@ -30,6 +32,9 @@ hosts:
     services:                        # optional — systemd services to monitor
       - nginx
       - docker
+    # user_services:                 # optional — systemd user services of the
+    #   - myapp-backend              # SSH user (systemctl --user); requires
+    #                                # loginctl enable-linger tom
 
   # Proxmox hypervisor — ip/mac/ssh_user refer to the physical machine.
   # VMs running on it are listed under vms:.
@@ -52,4 +57,5 @@ hosts:
         # nordvpn_hostname: nas-main.nord
         services:
           - lanctl-backend.service
-          - myapp-backend.service
+        # user_services:               # optional — systemd --user services of
+        #   - myapp-backend.service    # the VM's SSH user

@@ -50,6 +50,7 @@ type vmStatus struct {
 	IP              string            `json:"ip"`
 	Online          bool              `json:"online"`
 	Services        []string          `json:"services"`
+	UserServices    []string          `json:"user_services"`
 	ServiceStatuses map[string]string `json:"service_statuses"`
 	VPNHostname     *string           `json:"vpn_hostname"`
 	VPNReachable    *bool             `json:"vpn_reachable"`
@@ -63,6 +64,7 @@ type hostStatus struct {
 	Online          bool              `json:"online"`
 	Local           bool              `json:"local"`
 	Services        []string          `json:"services"`
+	UserServices    []string          `json:"user_services"`
 	ServiceStatuses map[string]string `json:"service_statuses"`
 	VPNHostname     *string           `json:"vpn_hostname"`
 	VPNReachable    *bool             `json:"vpn_reachable"`
@@ -71,29 +73,58 @@ type hostStatus struct {
 
 // ── Concurrent host/VM checkers ───────────────────────────────────────────────
 
+// serviceStatuses queries the systemd status of system and user services and
+// merges the results. A failed scope is logged under label and skipped, so one
+// unreachable user manager does not hide system service statuses.
+func serviceStatuses(label string, local bool, ip, sshUser, keyPath string, services, userServices []string) map[string]string {
+	statuses := map[string]string{}
+	for _, group := range []struct {
+		names     []string
+		userScope bool
+	}{
+		{services, false},
+		{userServices, true},
+	} {
+		if len(group.names) == 0 {
+			continue
+		}
+		var s map[string]string
+		var err error
+		if local {
+			s, err = ops.ServiceStatuses(group.names, group.userScope)
+		} else {
+			s, err = ops.SSHServiceStatuses(ip, sshUser, keyPath, group.names, group.userScope)
+		}
+		if err != nil {
+			log.Printf("service status check failed for %s: %v", label, err)
+			continue
+		}
+		for name, status := range s {
+			statuses[name] = status
+		}
+	}
+	return statuses
+}
+
 func checkVM(cfg config.Config, host config.Host, vm config.VM) vmStatus {
 	online := vm.Local || ops.CheckSSHPort(vm.IP, sshTimeout)
 
 	statuses := map[string]string{}
-	if online && len(vm.Services) > 0 {
-		var err error
-		var s map[string]string
-		if vm.Local {
-			s, err = ops.ServiceStatuses(vm.Services)
-		} else {
-			keyPath := config.ResolveVMSSHKey(cfg, host, vm)
-			s, err = ops.SSHServiceStatuses(vm.IP, vm.SSHUser, keyPath, vm.Services)
+	if online && (len(vm.Services) > 0 || len(vm.UserServices) > 0) {
+		keyPath := ""
+		if !vm.Local {
+			keyPath = config.ResolveVMSSHKey(cfg, host, vm)
 		}
-		if err != nil {
-			log.Printf("service status check failed for VM %s: %v", vm.Name, err)
-		} else {
-			statuses = s
-		}
+		statuses = serviceStatuses(vm.Name, vm.Local, vm.IP, vm.SSHUser, keyPath, vm.Services, vm.UserServices)
 	}
 
 	svcs := vm.Services
 	if svcs == nil {
 		svcs = []string{}
+	}
+	userSvcs := vm.UserServices
+	if userSvcs == nil {
+		userSvcs = []string{}
 	}
 
 	var vpnHost *string
@@ -111,6 +142,7 @@ func checkVM(cfg config.Config, host config.Host, vm config.VM) vmStatus {
 		IP:              vm.IP,
 		Online:          online,
 		Services:        svcs,
+		UserServices:    userSvcs,
 		ServiceStatuses: statuses,
 		VPNHostname:     vpnHost,
 		VPNReachable:    vpnReachable,
@@ -143,20 +175,12 @@ func checkHost(cfg config.Config, host config.Host) hostCheckResult {
 		return hostCheckResult{online: online, statuses: statuses, vms: results}
 	}
 
-	if online && len(host.Services) > 0 {
-		var err error
-		var s map[string]string
-		if host.Local {
-			s, err = ops.ServiceStatuses(host.Services)
-		} else {
-			keyPath := config.ResolveSSHKey(cfg, host)
-			s, err = ops.SSHServiceStatuses(host.IP, host.SSHUser, keyPath, host.Services)
+	if online && (len(host.Services) > 0 || len(host.UserServices) > 0) {
+		keyPath := ""
+		if !host.Local {
+			keyPath = config.ResolveSSHKey(cfg, host)
 		}
-		if err != nil {
-			log.Printf("service status check failed for %s: %v", host.Name, err)
-		} else {
-			statuses = s
-		}
+		statuses = serviceStatuses(host.Name, host.Local, host.IP, host.SSHUser, keyPath, host.Services, host.UserServices)
 	}
 
 	return hostCheckResult{online: online, statuses: statuses}
@@ -198,6 +222,10 @@ func GetHosts(w http.ResponseWriter, r *http.Request) {
 		if svcs == nil {
 			svcs = []string{}
 		}
+		userSvcs := h.UserServices
+		if userSvcs == nil {
+			userSvcs = []string{}
+		}
 
 		var vpnHost *string
 		var vpnReachable *bool
@@ -221,6 +249,7 @@ func GetHosts(w http.ResponseWriter, r *http.Request) {
 			Online:          res.online,
 			Local:           h.Local,
 			Services:        svcs,
+			UserServices:    userSvcs,
 			ServiceStatuses: res.statuses,
 			VPNHostname:     vpnHost,
 			VPNReachable:    vpnReachable,
@@ -311,17 +340,19 @@ func GetLogs(w http.ResponseWriter, r *http.Request) {
 		lhttphandler.ErrorJSON(w, http.StatusNotFound, fmt.Sprintf("Host '%s' not found", name))
 		return
 	}
-	if !config.ValidateService(host, service) {
+	scope, ok := config.FindService(host, service)
+	if !ok {
 		lhttphandler.ErrorJSON(w, http.StatusNotFound, fmt.Sprintf("Service '%s' not configured for host '%s'", service, name))
 		return
 	}
+	userScope := scope == config.ScopeUser
 
 	var out string
 	if host.Local {
-		out, err = ops.JournalLines(service, lines)
+		out, err = ops.JournalLines(service, lines, userScope)
 	} else {
 		keyPath := config.ResolveSSHKey(cfg, host)
-		out, err = ops.SSHJournalLines(host.IP, host.SSHUser, keyPath, service, lines)
+		out, err = ops.SSHJournalLines(host.IP, host.SSHUser, keyPath, service, lines, userScope)
 	}
 	if err != nil {
 		lhttphandler.ErrorJSON(w, http.StatusInternalServerError, fmt.Sprintf("SSH error: %v", err))
@@ -348,17 +379,18 @@ func StreamLogs(w http.ResponseWriter, r *http.Request) {
 		lhttphandler.ErrorJSON(w, http.StatusNotFound, fmt.Sprintf("Host '%s' not found", name))
 		return
 	}
-	if !config.ValidateService(host, service) {
+	scope, ok := config.FindService(host, service)
+	if !ok {
 		lhttphandler.ErrorJSON(w, http.StatusNotFound, fmt.Sprintf("Service '%s' not configured for host '%s'", service, name))
 		return
 	}
 
 	setSSEHeaders(w)
 	if host.Local {
-		ops.StreamJournal(service, w, r)
+		ops.StreamJournal(service, scope == config.ScopeUser, w, r)
 	} else {
 		keyPath := config.ResolveSSHKey(cfg, host)
-		ops.SSHStreamJournal(host.IP, host.SSHUser, keyPath, service, w, r)
+		ops.SSHStreamJournal(host.IP, host.SSHUser, keyPath, service, scope == config.ScopeUser, w, r)
 	}
 }
 
@@ -384,16 +416,17 @@ func ServiceControl(w http.ResponseWriter, r *http.Request) {
 		lhttphandler.ErrorJSON(w, http.StatusNotFound, fmt.Sprintf("Host '%s' not found", name))
 		return
 	}
-	if !config.ValidateService(host, service) {
+	scope, ok := config.FindService(host, service)
+	if !ok {
 		lhttphandler.ErrorJSON(w, http.StatusNotFound, fmt.Sprintf("Service '%s' not configured for host '%s'", service, name))
 		return
 	}
 
 	if host.Local {
-		err = ops.ServiceControl(service, action)
+		err = ops.ServiceControl(service, action, scope == config.ScopeUser)
 	} else {
 		keyPath := config.ResolveSSHKey(cfg, host)
-		err = ops.SSHServiceControl(host.IP, host.SSHUser, keyPath, service, action)
+		err = ops.SSHServiceControl(host.IP, host.SSHUser, keyPath, service, action, scope == config.ScopeUser)
 	}
 	if err != nil {
 		lhttphandler.ErrorJSON(w, http.StatusInternalServerError, err.Error())
@@ -524,17 +557,18 @@ func VMGetLogs(w http.ResponseWriter, r *http.Request) {
 		lhttphandler.ErrorJSON(w, http.StatusNotFound, errMsg)
 		return
 	}
-	if !config.ValidateVMService(vm, service) {
+	scope, ok := config.FindVMService(vm, service)
+	if !ok {
 		lhttphandler.ErrorJSON(w, http.StatusNotFound, fmt.Sprintf("Service '%s' not configured for VM '%s'", service, vmName))
 		return
 	}
 
 	var out string
 	if vm.Local {
-		out, err = ops.JournalLines(service, lines)
+		out, err = ops.JournalLines(service, lines, scope == config.ScopeUser)
 	} else {
 		keyPath := config.ResolveVMSSHKey(cfg, host, vm)
-		out, err = ops.SSHJournalLines(vm.IP, vm.SSHUser, keyPath, service, lines)
+		out, err = ops.SSHJournalLines(vm.IP, vm.SSHUser, keyPath, service, lines, scope == config.ScopeUser)
 	}
 	if err != nil {
 		lhttphandler.ErrorJSON(w, http.StatusInternalServerError, fmt.Sprintf("SSH error: %v", err))
@@ -561,17 +595,18 @@ func VMStreamLogs(w http.ResponseWriter, r *http.Request) {
 		lhttphandler.ErrorJSON(w, http.StatusNotFound, errMsg)
 		return
 	}
-	if !config.ValidateVMService(vm, service) {
+	scope, ok := config.FindVMService(vm, service)
+	if !ok {
 		lhttphandler.ErrorJSON(w, http.StatusNotFound, fmt.Sprintf("Service '%s' not configured for VM '%s'", service, vmName))
 		return
 	}
 
 	setSSEHeaders(w)
 	if vm.Local {
-		ops.StreamJournal(service, w, r)
+		ops.StreamJournal(service, scope == config.ScopeUser, w, r)
 	} else {
 		keyPath := config.ResolveVMSSHKey(cfg, host, vm)
-		ops.SSHStreamJournal(vm.IP, vm.SSHUser, keyPath, service, w, r)
+		ops.SSHStreamJournal(vm.IP, vm.SSHUser, keyPath, service, scope == config.ScopeUser, w, r)
 	}
 }
 
@@ -597,17 +632,18 @@ func VMServiceControl(w http.ResponseWriter, r *http.Request) {
 		lhttphandler.ErrorJSON(w, http.StatusNotFound, errMsg)
 		return
 	}
-	if !config.ValidateVMService(vm, service) {
+	scope, ok := config.FindVMService(vm, service)
+	if !ok {
 		lhttphandler.ErrorJSON(w, http.StatusNotFound, fmt.Sprintf("Service '%s' not configured for VM '%s'", service, vmName))
 		return
 	}
 
 	var err2 error
 	if vm.Local {
-		err2 = ops.ServiceControl(service, action)
+		err2 = ops.ServiceControl(service, action, scope == config.ScopeUser)
 	} else {
 		keyPath := config.ResolveVMSSHKey(cfg, host, vm)
-		err2 = ops.SSHServiceControl(vm.IP, vm.SSHUser, keyPath, service, action)
+		err2 = ops.SSHServiceControl(vm.IP, vm.SSHUser, keyPath, service, action, scope == config.ScopeUser)
 	}
 	if err2 != nil {
 		lhttphandler.ErrorJSON(w, http.StatusInternalServerError, err2.Error())
