@@ -18,7 +18,10 @@ both sides.
 ### Sources
 
 `--source dist|release|auto` (default `auto` → `dist/` when the needed arch
-binary exists, else the GitHub Releases tarball).
+binary exists, else the GitHub Releases tarball). `auto` uses `dist/` only
+when the binary carries `--check` support; a stale `dist/` falls back to
+release with a log line, and explicit `--source dist` with a stale binary
+fails pointing at `make cross`.
 
 - `dist`: assembles the exact release-tarball layout from the checkout
   (`lanctl` + `lanctl-cli` binaries, `frontend/`, `deploy/`,

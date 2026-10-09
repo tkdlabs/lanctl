@@ -115,10 +115,12 @@ deploy/install-remote.sh --host mybox --arch arm64 --source release -y
 
 The target arch is auto-detected (`--arch` overrides), the bundle is streamed
 over SSH into a remote temp dir that is removed afterwards, and `install.sh`
-runs remotely under sudo. Add `--config-remote <url>` to enable config sync
-in the same step. `--dry-run` previews the plan with zero side effects;
-`--help` lists all options (custom dirs, ports, service user, release
-version, extra ssh options).
+runs remotely under sudo. Binaries come from a fresh local `dist/` when
+available, else the latest release (explicit `--source dist` with a stale
+`dist/` fails fast — run `make cross` to refresh it). Add `--config-remote
+<url>` to enable config sync in the same step. `--dry-run` previews the plan
+with zero side effects; `--help` lists all options (custom dirs, ports,
+service user, release version, extra ssh options).
 
 ## Keeping multiple boxes in sync
 

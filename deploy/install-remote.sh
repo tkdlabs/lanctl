@@ -21,6 +21,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 die() { echo "error: $*" >&2; exit 1; }
 log() { echo "install-remote: $*"; }
 
+# CHECK_MARKER: usage text of the --check flag (see lanctl-sync.sh).
+# dist/ binaries predating it are stale: the sync would refuse them, so
+# shipping them is refused here instead.
+CHECK_MARKER="validate hosts.yaml and exit"
+
+# dist_binary_state <arch>: echo ok|missing|stale for the local dist binary.
+dist_binary_state() {
+  local bin="$SCRIPT_DIR/dist/lanctl-linux-$1"
+  if [ ! -f "$bin" ]; then echo missing; return 0; fi
+  if grep -a -q -F "$CHECK_MARKER" "$bin" 2>/dev/null; then echo ok; else echo stale; fi
+}
+
 usage() {
   cat <<'EOF'
 usage: install-remote.sh --host HOST [options]
@@ -29,7 +41,7 @@ usage: install-remote.sh --host HOST [options]
   --user USER        ssh user (default: current user)
   --ssh-port PORT    ssh port (default: 22)
   --arch ARCH        target arch: amd64|arm64|arm (default: auto-detect)
-  --source SRC       binary source: dist|release|auto (default: auto)
+  --source SRC       dist|release|auto (default: auto = fresh dist/, else release)
   --version TAG      release tag for --source release (default: latest)
   --repo SLUG        GitHub repo slug for releases (default: tkdlabs/lanctl)
   --dir DIR          remote install dir (default: /opt/lanctl)
@@ -145,19 +157,31 @@ main() {
 
   local src_how="" tarball="" stagedir=""
   if [ "$source" = "auto" ]; then
-    if [[ "$arch" == \<* ]] || [ -f "$SCRIPT_DIR/dist/lanctl-linux-$arch" ]; then
+    if [[ "$arch" == \<* ]]; then
       source="dist"
     else
-      source="release"
+      case "$(dist_binary_state "$arch")" in
+        ok) source="dist" ;;
+        missing)
+          source="release"
+          log "no local dist binary; falling back to release"
+          ;;
+        stale)
+          source="release"
+          log "local dist binary predates --check support; falling back to release (run 'make cross' to refresh dist/)"
+          ;;
+      esac
     fi
   fi
   if [ "$source" = "dist" ]; then
     if [[ "$arch" == \<* ]]; then
       src_how="dist/ (file check skipped in dry-run)"
-    elif [ -f "$SCRIPT_DIR/dist/lanctl-linux-$arch" ]; then
-      src_how="dist/lanctl-linux-$arch"
     else
-      die "dist/lanctl-linux-$arch not found; run 'make cross' or use --source release"
+      case "$(dist_binary_state "$arch")" in
+        ok) src_how="dist/lanctl-linux-$arch" ;;
+        missing) die "dist/lanctl-linux-$arch not found; run 'make cross' or use --source release" ;;
+        stale) die "dist/lanctl-linux-$arch predates --check support; run 'make cross' or use --source release" ;;
+      esac
     fi
   else
     if [ "$version" = "latest" ]; then
