@@ -138,6 +138,28 @@ git_ssh_command() {
     "$key" "$known"
 }
 
+# git_safe_env: print VAR=value lines git needs for this remote. Local-path
+# remotes live outside the service user's ownership (e.g. root reading an
+# admin's repo), which modern git refuses as "dubious ownership" — allowlist
+# the configured remote (raw and resolved) for our invocations only.
+# SSH remotes need nothing: transport runs as the SSH user server-side.
+git_safe_env() {
+  if is_ssh_remote "$REMOTE"; then
+    return 0
+  fi
+  local path="$REMOTE"
+  case "$path" in
+    file://*) path="${path#file://}" ;;
+  esac
+  local resolved
+  resolved="$(realpath -m "$path" 2>/dev/null || echo "$path")"
+  echo "GIT_CONFIG_COUNT=2"
+  echo "GIT_CONFIG_KEY_0=safe.directory"
+  echo "GIT_CONFIG_VALUE_0=$path"
+  echo "GIT_CONFIG_KEY_1=safe.directory"
+  echo "GIT_CONFIG_VALUE_1=$resolved"
+}
+
 cmd_run() {
   if [ -f "$DISABLED_FILE" ]; then
     log "sync held ($DISABLED_FILE exists); doing nothing"
@@ -154,6 +176,10 @@ cmd_run() {
       fail "git ssh setup: $GIT_SSH_COMMAND"
     fi
     export GIT_SSH_COMMAND
+  else
+    while IFS='=' read -r key value; do
+      [ -n "$key" ] && export "$key=$value"
+    done < <(git_safe_env)
   fi
 
   mkdir -p "$WORK_DIR"
