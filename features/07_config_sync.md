@@ -75,7 +75,10 @@ pre-apply gate (and handy for CI).
    non-zero. **Never swap a failing config.**
 5. On success: `sleep $SYNC_DELAY` (default 300s) with a SIGTERM trap,
    re-check the sentinel, back up to `hosts.yaml.last-good`, atomic `mv`,
-   record the rev in `state.json`. No restart.
+   record the rev in `state.json`. No restart. `state.json` tracks the
+   lifecycle: `ok`, `failed`, `pending` (validated, in delay), `held`,
+   `aborted` — so a blocked-looking manual `systemctl start` (oneshot
+   units wait for completion) is observable via `status`/journal.
 
 `lanctl-sync.service` (oneshot, `EnvironmentFile`, `TimeoutStartSec=900`,
 `KillMode=mixed`) + `lanctl-sync.timer` (`OnBootSec=2min`,

@@ -150,8 +150,14 @@ lanctl --check --config /path/to/hosts.yaml
 
 Emergency brakes: `lanctl-sync.sh hold` (sentinel file), `systemctl stop
 lanctl-sync` during the delay window, or `systemctl mask
-lanctl-sync.timer`. `lanctl-sync.sh status` shows the last sync state.
+lanctl-sync.timer`. `lanctl-sync.sh status` shows the last sync state
+(`ok`, `failed`, `pending`, `held`, `aborted` with rev and time).
 `hosts.yaml.last-good` is kept as a backup on every apply.
+
+Note: a manual `systemctl start lanctl-sync.service` blocks until the run
+finishes, including the 5-minute apply delay — this is the safety window
+working, not a hang. Watch progress with `journalctl -f -u lanctl-sync`,
+or start with `systemctl start --no-block lanctl-sync.service`.
 
 If a run reports the validator `lacks --check support`, the box's `lanctl`
 binary predates `v0.2.0` — refresh it (`install-remote.sh --source release`)

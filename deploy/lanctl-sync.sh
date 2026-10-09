@@ -247,8 +247,9 @@ cmd_run() {
     fail "staged config (rev $rev) rejected: $err"
   fi
   log "staged rev $rev validated; applying in ${DELAY}s (stop the service or run 'hold' to abort)"
+  write_state "pending" "$rev"
 
-  trap 'kill "$sleep_pid" 2>/dev/null; log "aborted during apply delay"; exit 0' TERM INT
+  trap 'kill "$sleep_pid" 2>/dev/null; log "aborted during apply delay"; write_state "aborted" "$rev"; exit 0' TERM INT
   sleep "$DELAY" &
   sleep_pid=$!
   wait "$sleep_pid" || exit 0
