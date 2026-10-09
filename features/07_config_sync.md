@@ -75,11 +75,20 @@ pre-apply gate (and handy for CI).
    non-zero. **Never swap a failing config.**
 5. On success: `sleep $SYNC_DELAY` (default 300s) with a SIGTERM trap,
    re-check the sentinel, back up to `hosts.yaml.last-good`, atomic `mv`,
-   record the applied rev in `state.json`. No restart.
+   record the rev in `state.json`. No restart.
 
 `lanctl-sync.service` (oneshot, `EnvironmentFile`, `TimeoutStartSec=900`,
 `KillMode=mixed`) + `lanctl-sync.timer` (`OnBootSec=2min`,
 `OnUnitActiveSec=15min`, `Persistent=true`).
+
+### SSH identity
+
+The sync runs as the service user, so SSH remotes use an explicit identity:
+`CONFIG_GIT_SSH_KEY` + `CONFIG_GIT_KNOWN_HOSTS`, exported via
+`GIT_SSH_COMMAND` (BatchMode, IdentitiesOnly, pinned host key, connect
+timeout). Missing files fail fast naming the variable. Plain local-path
+remotes (the box hosting the repo) skip SSH entirely. A stale mirror dir
+left by a failed clone is detected and re-cloned.
 
 **Layered kill switches:** `lanctl-sync hold` (sentinel), `systemctl stop`
 during the delay (SIGTERM aborts pre-apply), `systemctl mask

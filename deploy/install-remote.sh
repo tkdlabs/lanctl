@@ -39,6 +39,8 @@ usage: install-remote.sh --host HOST [options]
   --config-remote U  CONFIG_GIT_REMOTE for the target (enables sync timer)
   --branch B         CONFIG_GIT_BRANCH for the target (default: main)
   --sync-delay SECS  SYNC_DELAY for the target (default: 300)
+  --git-key FILE     local private key to provision as the target's sync key
+  --git-known-hosts FILE  local known_hosts to provision for the repo host
   --ssh-opt OPT      extra ssh option (repeatable)
   -y, --yes          skip confirmation prompt
   -n, --dry-run      print the plan; change nothing
@@ -82,6 +84,7 @@ main() {
   local repo="tkdlabs/lanctl" remote_dir="/opt/lanctl" service_port="8003"
   local run_user="root" service_name="lanctl" allow_shutdown="1"
   local local_host="" config_remote="" config_branch="main" sync_delay="300"
+  local git_key="" git_known=""
   local yes=0 dryrun=0
   local -a ssh_opts=()
 
@@ -101,6 +104,8 @@ main() {
       --config-remote) config_remote="$2"; shift 2 ;;
       --branch)        config_branch="$2"; shift 2 ;;
       --sync-delay)    sync_delay="$2"; shift 2 ;;
+      --git-key)       git_key="$2"; shift 2 ;;
+      --git-known-hosts) git_known="$2"; shift 2 ;;
       --ssh-opt)       ssh_opts+=("$2"); shift 2 ;;
       -y|--yes)        yes=1; shift ;;
       -n|--dry-run)    dryrun=1; shift ;;
@@ -181,12 +186,27 @@ main() {
   add_env CONFIG_GIT_REMOTE "$config_remote"
   add_env CONFIG_GIT_BRANCH "$config_branch"
   add_env SYNC_DELAY "$sync_delay"
+  # Sync SSH identity is provisioned onto the target below; wire its paths.
+  if [ -n "$git_key" ]; then
+    [ -f "$git_key" ] || die "--git-key $git_key not found"
+    add_env CONFIG_GIT_SSH_KEY "$remote_dir/.config-sync/ssh_key"
+  fi
+  if [ -n "$git_known" ]; then
+    [ -f "$git_known" ] || die "--git-known-hosts $git_known not found"
+    add_env CONFIG_GIT_KNOWN_HOSTS "$remote_dir/.config-sync/known_hosts"
+  fi
 
   if [ "$dryrun" -eq 1 ]; then
     echo "target:  $ssh_user@$host (ssh port $ssh_port)"
     echo "arch:    $arch ($arch_how)"
     echo "source:  $src_how"
     echo "env:$env_args"
+    if [ -n "$git_key" ]; then
+      echo "keys:    $git_key -> $remote_dir/.config-sync/ssh_key (0600, $run_user)"
+    fi
+    if [ -n "$git_known" ]; then
+      echo "keys:    $git_known -> $remote_dir/.config-sync/known_hosts (0644, $run_user)"
+    fi
     echo "remote:  mktemp -d, stream bundle, sudo env … bash <tmp>/lanctl-linux-$arch/install.sh, verify, cleanup"
     return 0
   fi
@@ -265,6 +285,29 @@ main() {
       log "warning: passwordless sudo unavailable and stdin is not a terminal; sudo may fail"
     fi
   fi
+
+  # --- provision the sync SSH identity before install.sh runs ---
+  if [ -n "$git_key" ] || [ -n "$git_known" ]; then
+    log "provisioning sync SSH identity on $host"
+    "${ssh_base[@]}" "${ssh_tty[@]}" \
+      "sudo install -d -m 0700 -o $run_user -g $run_user $remote_dir/.config-sync" \
+      || die "cannot create $remote_dir/.config-sync on $host"
+    if [ -n "$git_key" ]; then
+      scp -P "$ssh_port" "${ssh_opts[@]}" "$git_key" "$ssh_user@$host:$remote_tmp/git_ssh_key" \
+        || die "key upload failed"
+      "${ssh_base[@]}" "${ssh_tty[@]}" \
+        "sudo install -o $run_user -g $run_user -m 0600 $remote_tmp/git_ssh_key $remote_dir/.config-sync/ssh_key" \
+        || die "key install failed"
+    fi
+    if [ -n "$git_known" ]; then
+      scp -P "$ssh_port" "${ssh_opts[@]}" "$git_known" "$ssh_user@$host:$remote_tmp/git_known_hosts" \
+        || die "known_hosts upload failed"
+      "${ssh_base[@]}" "${ssh_tty[@]}" \
+        "sudo install -o $run_user -g $run_user -m 0644 $remote_tmp/git_known_hosts $remote_dir/.config-sync/known_hosts" \
+        || die "known_hosts install failed"
+    fi
+  fi
+
   log "running install.sh on $host"
   # shellcheck disable=SC2029
   "${ssh_base[@]}" "${ssh_tty[@]}" "cd $remote_tmp/$bundle_dir && sudo env$env_args bash install.sh" \

@@ -154,6 +154,33 @@ lanctl-sync.timer`. `lanctl-sync.sh status` shows the last sync state.
 Treat the shared file as secret (MACs, IPs, SSH users, tokens): private repo
 only, mode `0600`, never in tracked files.
 
+### Sync SSH access
+
+The sync runs as the service user (`root` by default), so that user needs its
+own SSH identity for the config repo — your user's key is not enough:
+
+```bash
+sudo -i
+ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_config_sync
+# authorize the pubkey on the repo host (read-only deploy key), then:
+ssh-keyscan config-repo.local >> ~/.ssh/known_hosts
+```
+
+Point the sync at them in `$DEPLOY_DIR/.env`:
+
+```
+CONFIG_GIT_SSH_KEY=/root/.ssh/id_config_sync
+CONFIG_GIT_KNOWN_HOSTS=/root/.ssh/known_hosts
+```
+
+Without these, an SSH remote fails fast with a message naming the missing
+setting instead of a cryptic git error. `install-remote.sh` provisions both
+files in one step (`--git-key` / `--git-known-hosts`).
+
+On the box hosting the repo itself, skip SSH entirely — set
+`CONFIG_GIT_REMOTE` to the plain local path (e.g.
+`/home/sync/git-repos/lanctl-config`); no key or `known_hosts` is needed.
+
 ## REST API
 
 | Method | Path | Description |

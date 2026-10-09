@@ -20,6 +20,8 @@
 #   LANCTL_LOCAL_HOST    This box's host name (or host/vm) for shared configs
 #   CONFIG_GIT_REMOTE    Private git remote for config sync (enables the timer)
 #   CONFIG_GIT_BRANCH    Tracked branch for config sync   (default: main)
+#   CONFIG_GIT_SSH_KEY   Private key the service user uses for SSH remotes
+#   CONFIG_GIT_KNOWN_HOSTS  known_hosts pinning the repo host's key
 #   SYNC_DELAY           Seconds to wait before applying a synced config (default: 300)
 #   SYNC_SERVICE_NAME    Sync timer unit name             (default: lanctl-sync)
 #
@@ -58,7 +60,7 @@ die() { echo "error: $*" >&2; exit 1; }
 if [ -f "$DEPLOY_DIR/.env" ]; then
   while IFS='=' read -r key value; do
     case "$key" in
-      PORT|LANCTL_ALLOW_SHUTDOWN|LANCTL_LOCAL_HOST|CONFIG_GIT_REMOTE|CONFIG_GIT_BRANCH|SYNC_DELAY)
+      PORT|LANCTL_ALLOW_SHUTDOWN|LANCTL_LOCAL_HOST|CONFIG_GIT_REMOTE|CONFIG_GIT_BRANCH|CONFIG_GIT_SSH_KEY|CONFIG_GIT_KNOWN_HOSTS|SYNC_DELAY)
         if [ -z "${!key+x}" ]; then
           printf -v "$key" '%s' "$value"
         fi
@@ -70,6 +72,8 @@ fi
 LANCTL_LOCAL_HOST="${LANCTL_LOCAL_HOST:-}"
 CONFIG_GIT_REMOTE="${CONFIG_GIT_REMOTE:-}"
 CONFIG_GIT_BRANCH="${CONFIG_GIT_BRANCH:-main}"
+CONFIG_GIT_SSH_KEY="${CONFIG_GIT_SSH_KEY:-}"
+CONFIG_GIT_KNOWN_HOSTS="${CONFIG_GIT_KNOWN_HOSTS:-}"
 SYNC_DELAY="${SYNC_DELAY:-300}"
 PORT="${PORT:-8003}"
 LANCTL_ALLOW_SHUTDOWN="${LANCTL_ALLOW_SHUTDOWN:-1}"
@@ -142,8 +146,14 @@ LANCTL_ALLOW_SHUTDOWN=$LANCTL_ALLOW_SHUTDOWN
 LANCTL_LOCAL_HOST=$LANCTL_LOCAL_HOST
 # Private git remote holding the shared hosts.yaml. Empty disables sync.
 # e.g. CONFIG_GIT_REMOTE=git@config-repo.local:~/git-repos/lanctl-config.git
+# On the box hosting the repo itself, use the plain local path (no SSH).
 CONFIG_GIT_REMOTE=$CONFIG_GIT_REMOTE
 CONFIG_GIT_BRANCH=$CONFIG_GIT_BRANCH
+# SSH identity the service user (RUN_USER) uses for SSH remotes. Not needed
+# for local-path remotes. The key needs read access to the config repo;
+# the known_hosts file pins the repo host's key (ssh-keyscan).
+CONFIG_GIT_SSH_KEY=$CONFIG_GIT_SSH_KEY
+CONFIG_GIT_KNOWN_HOSTS=$CONFIG_GIT_KNOWN_HOSTS
 # Seconds a validated config waits before applying (time to hold/stop).
 SYNC_DELAY=$SYNC_DELAY
 EOF

@@ -13,7 +13,11 @@
 #   status   Show hold state, last sync state, and settings
 #
 # Settings (from the EnvironmentFile, i.e. $DEPLOY_DIR/.env):
-#   CONFIG_GIT_REMOTE   git remote, e.g. git@config-repo.local:~/git-repos/lanctl-config.git
+#   CONFIG_GIT_REMOTE   git remote: ssh:// URL, scp-like host:path, or a plain
+#                       local path on the box hosting the repo (no SSH then).
+#                       e.g. git@config-repo.local:~/git-repos/lanctl-config.git
+#   CONFIG_GIT_SSH_KEY  private key the service user uses for SSH remotes.
+#   CONFIG_GIT_KNOWN_HOSTS  known_hosts file pinning the repo host's key.
 #   CONFIG_GIT_BRANCH   branch to track                 (default: main)
 #   SYNC_DELAY          seconds to wait before applying (default: 300)
 #
@@ -90,6 +94,50 @@ write_state() { # <status> <rev>
     "$1" "$2" "$(date -u +%FT%TZ)" > "$STATE_FILE"
 }
 
+# is_ssh_remote <url>: true for ssh:// URLs and scp-like host:path remotes
+# (a colon before the first slash — git's own interpretation). Plain paths
+# and file:// / https:// URLs are not SSH transport.
+is_ssh_remote() {
+  case "$1" in
+    ssh://*) return 0 ;;
+    *://*) return 1 ;;
+  esac
+  case "$1" in
+    *:*)
+      local before="${1%%/*}"
+      case "$before" in
+        *:* ) return 0 ;;
+      esac
+      return 1 ;;
+    *) return 1 ;;
+  esac
+}
+
+# git_ssh_command: print the ssh command git must use for SSH remotes.
+# Non-interactive (no password prompts) with an explicit key and pinned host
+# key, so a missing setup fails fast with a message naming the setting.
+git_ssh_command() {
+  local key="${CONFIG_GIT_SSH_KEY:-}" known="${CONFIG_GIT_KNOWN_HOSTS:-}"
+  if [ -z "$key" ]; then
+    echo "CONFIG_GIT_SSH_KEY is not set; the service user needs its own SSH key for the config repo" >&2
+    return 1
+  fi
+  if [ ! -f "$key" ]; then
+    echo "CONFIG_GIT_SSH_KEY=$key: file not found" >&2
+    return 1
+  fi
+  if [ -z "$known" ]; then
+    echo "CONFIG_GIT_KNOWN_HOSTS is not set; pin the repo host key (ssh-keyscan)" >&2
+    return 1
+  fi
+  if [ ! -f "$known" ]; then
+    echo "CONFIG_GIT_KNOWN_HOSTS=$known: file not found" >&2
+    return 1
+  fi
+  printf 'ssh -i %s -o IdentitiesOnly=yes -o UserKnownHostsFile=%s -o BatchMode=yes -o ConnectTimeout=20' \
+    "$key" "$known"
+}
+
 cmd_run() {
   if [ -f "$DISABLED_FILE" ]; then
     log "sync held ($DISABLED_FILE exists); doing nothing"
@@ -99,11 +147,24 @@ cmd_run() {
   [ -x "$BIN" ] || fail "validator $BIN is missing or not executable"
   command -v git >/dev/null 2>&1 || fail "git is not installed"
 
+  # SSH remotes need an explicit identity for the service user; local paths
+  # (e.g. on the box hosting the repo) need none.
+  if is_ssh_remote "$REMOTE"; then
+    if ! GIT_SSH_COMMAND="$(git_ssh_command 2>&1)"; then
+      fail "git ssh setup: $GIT_SSH_COMMAND"
+    fi
+    export GIT_SSH_COMMAND
+  fi
+
   mkdir -p "$WORK_DIR"
+  if [ -d "$MIRROR_DIR" ] && ! git --git-dir="$MIRROR_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+    log "removing stale mirror dir left by a failed clone"
+    rm -rf "$MIRROR_DIR"
+  fi
   if [ ! -d "$MIRROR_DIR" ]; then
     log "cloning config mirror from $REMOTE"
     git clone --quiet --mirror "$REMOTE" "$MIRROR_DIR" \
-      || fail "git clone failed (check remote and deploy key)"
+      || fail "git clone failed (check CONFIG_GIT_REMOTE; for SSH remotes also CONFIG_GIT_SSH_KEY/CONFIG_GIT_KNOWN_HOSTS)"
   fi
   git --git-dir="$MIRROR_DIR" remote set-url origin "$REMOTE"
   git --git-dir="$MIRROR_DIR" fetch --quiet origin "$BRANCH" \
@@ -151,10 +212,12 @@ cmd_run() {
   log "applied rev $rev (no restart needed; config is re-read per request)"
 }
 
-case "${1:-}" in
-  run)    cmd_run ;;
-  hold)   cmd_hold ;;
-  resume) cmd_resume ;;
-  status) cmd_status ;;
-  *)      usage ;;
-esac
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  case "${1:-}" in
+    run)    cmd_run ;;
+    hold)   cmd_hold ;;
+    resume) cmd_resume ;;
+    status) cmd_status ;;
+    *)      usage ;;
+  esac
+fi
