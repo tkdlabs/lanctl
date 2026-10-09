@@ -70,7 +70,13 @@ const (
 // It checks $DEPLOY_DIR/hosts.yaml first, then falls back to the directory
 // of the running binary, then the working directory.
 func Load() (Config, error) {
-	return LoadFile(findConfigPath())
+	return LoadFile(Path())
+}
+
+// Path returns the resolved hosts.yaml path Load reads from: $DEPLOY_DIR,
+// then the working directory, then the bare "hosts.yaml" fallback.
+func Path() string {
+	return findConfigPath()
 }
 
 // LoadFile reads and parses the config file at the given path. Decoding is
@@ -181,7 +187,7 @@ func joinOrNone(names []string) string {
 // Priority: $DEPLOY_DIR/hosts.yaml → current working directory → empty path.
 func findConfigPath() string {
 	if deployDir := os.Getenv("DEPLOY_DIR"); deployDir != "" {
-		p := filepath.Join(expandTilde(deployDir), "hosts.yaml")
+		p := filepath.Join(ExpandTilde(deployDir), "hosts.yaml")
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
@@ -233,10 +239,10 @@ func GetHost(cfg Config, name string) (Host, bool) {
 // host SSHKey → global Config.SSHKey → default.
 func ResolveSSHKey(cfg Config, h Host) string {
 	if h.SSHKey != "" {
-		return expandTilde(h.SSHKey)
+		return ExpandTilde(h.SSHKey)
 	}
 	if cfg.SSHKey != "" {
-		return expandTilde(cfg.SSHKey)
+		return ExpandTilde(cfg.SSHKey)
 	}
 	return defaultSSHKey
 }
@@ -245,13 +251,13 @@ func ResolveSSHKey(cfg Config, h Host) string {
 // VM SSHKey → parent Host SSHKey → global Config.SSHKey → default.
 func ResolveVMSSHKey(cfg Config, host Host, vm VM) string {
 	if vm.SSHKey != "" {
-		return expandTilde(vm.SSHKey)
+		return ExpandTilde(vm.SSHKey)
 	}
 	if host.SSHKey != "" {
-		return expandTilde(host.SSHKey)
+		return ExpandTilde(host.SSHKey)
 	}
 	if cfg.SSHKey != "" {
-		return expandTilde(cfg.SSHKey)
+		return ExpandTilde(cfg.SSHKey)
 	}
 	return defaultSSHKey
 }
@@ -282,8 +288,8 @@ func findService(services, userServices []string, serviceName string) (ServiceSc
 	return "", false
 }
 
-// expandTilde replaces a leading ~ with the user's home directory.
-func expandTilde(path string) string {
+// ExpandTilde replaces a leading ~ with the user's home directory.
+func ExpandTilde(path string) string {
 	if strings.HasPrefix(path, "~/") {
 		home := os.Getenv("HOME")
 		if home == "" {

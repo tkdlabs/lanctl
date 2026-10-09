@@ -154,6 +154,13 @@ lanctl-sync.timer`. `lanctl-sync.sh status` shows the last sync state
 (`ok`, `failed`, `pending`, `held`, `aborted` with rev and time).
 `hosts.yaml.last-good` is kept as a backup on every apply.
 
+The web UI surfaces the same state as a banner, and `GET /api/notices`
+returns it as JSON: config path/age, whether the running config loads, the
+last sync result and how long ago it succeeded, and leveled notices for
+problems (invalid config, failed/held/aborted sync, stale config, a missing
+`nordvpn_token`, or SSH keys that do not exist). A successful sync older than
+`LANCTL_STALE_AFTER` seconds (default 3600) is reported stale.
+
 Note: a manual `systemctl start lanctl-sync.service` blocks until the run
 finishes, including the 5-minute apply delay — this is the safety window
 working, not a hang. Watch progress with `journalctl -f -u lanctl-sync`,
@@ -200,6 +207,7 @@ each run allowlists the remote in the service user's gitconfig.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/version` | Build version |
+| GET | `/api/notices` | Self-diagnostics: config health and sync freshness |
 | GET | `/api/hosts` | List hosts with online/service/VPN status |
 | POST | `/api/hosts/{name}/wake` | Send Wake-on-LAN magic packet |
 | POST | `/api/hosts/{name}/shutdown` | Shut down host (local or SSH) |

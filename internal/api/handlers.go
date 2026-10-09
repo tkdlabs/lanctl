@@ -21,6 +21,7 @@ var validActions = map[string]bool{"start": true, "stop": true, "restart": true}
 // RegisterRoutes registers all /api/* routes on mux.
 func RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/version", Version)
+	mux.HandleFunc("GET /api/notices", Notices)
 	mux.HandleFunc("GET /api/hosts", GetHosts)
 	mux.HandleFunc("POST /api/hosts/{name}/wake", Wake)
 	mux.HandleFunc("POST /api/hosts/{name}/shutdown", Shutdown)

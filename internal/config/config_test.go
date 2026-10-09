@@ -338,11 +338,11 @@ func TestIsProxmox(t *testing.T) {
 func TestExpandTilde(t *testing.T) {
 	t.Setenv("HOME", "/home/testuser")
 
-	if got := expandTilde("~/foo"); got != "/home/testuser/foo" {
-		t.Errorf("expandTilde(~/foo) = %q, want %q", got, "/home/testuser/foo")
+	if got := ExpandTilde("~/foo"); got != "/home/testuser/foo" {
+		t.Errorf("ExpandTilde(~/foo) = %q, want %q", got, "/home/testuser/foo")
 	}
-	if got := expandTilde("/abs/path"); got != "/abs/path" {
-		t.Errorf("expandTilde(/abs/path) = %q, want %q", got, "/abs/path")
+	if got := ExpandTilde("/abs/path"); got != "/abs/path" {
+		t.Errorf("ExpandTilde(/abs/path) = %q, want %q", got, "/abs/path")
 	}
 }
 

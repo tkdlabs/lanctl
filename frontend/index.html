@@ -23,10 +23,40 @@
       margin-bottom: 1.5rem;
     }
 
+    h1 .version {
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: #475569;
+      margin-left: 0.5rem;
+      vertical-align: middle;
+    }
+
     #status-bar {
       font-size: 0.75rem;
       color: #475569;
       margin-bottom: 1rem;
+    }
+
+    #notices {
+      max-width: 960px;
+      margin-bottom: 1rem;
+      padding: 0.6rem 0.9rem;
+      border: 1px solid;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      line-height: 1.6;
+    }
+    #notices.error    { background: #2a0f12; border-color: #7f1d1d; color: #fca5a5; }
+    #notices.degraded { background: #2a2007; border-color: #78350f; color: #fcd34d; }
+    #notices .n { display: flex; gap: 0.5rem; }
+    #notices .lvl {
+      flex-shrink: 0;
+      min-width: 4rem;
+      text-transform: uppercase;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      font-size: 0.65rem;
+      padding-top: 0.15rem;
     }
 
     table {
@@ -220,7 +250,8 @@
   </style>
 </head>
 <body>
-  <h1>lanctl</h1>
+  <h1>lanctl <span class="version" id="app-version"></span></h1>
+  <div id="notices" style="display:none"></div>
   <div id="status-bar">Loading…</div>
   <table>
     <thead>
@@ -249,6 +280,37 @@
       const res = await fetch('/api/hosts');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
+    }
+
+    async function fetchNotices() {
+      const res = await fetch('/api/notices');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    }
+
+    async function loadVersion() {
+      try {
+        const res = await fetch('/api/version');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.version) {
+          document.getElementById('app-version').textContent = data.version;
+        }
+      } catch { /* version is best-effort */ }
+    }
+
+    function renderNotices(report) {
+      const el = document.getElementById('notices');
+      if (!report || report.status === 'ok' || !report.notices?.length) {
+        el.style.display = 'none';
+        el.innerHTML = '';
+        return;
+      }
+      el.className = report.status;
+      el.innerHTML = report.notices.map(n =>
+        `<div class="n"><span class="lvl">${esc(n.level)}</span><span>${esc(n.message)}</span></div>`
+      ).join('');
+      el.style.display = '';
     }
 
     function svcDotClass(status) {
@@ -543,8 +605,12 @@
 
     async function poll() {
       try {
-        const hosts = await fetchHosts();
+        const [hosts, report] = await Promise.all([
+          fetchHosts(),
+          fetchNotices().catch(() => null),
+        ]);
         renderHosts(hosts);
+        renderNotices(report);
         document.getElementById('status-bar').textContent =
           `Last updated: ${new Date().toLocaleTimeString()} · refreshes every ${POLL_MS / 1000}s`;
       } catch (e) {
@@ -553,6 +619,7 @@
       pollTimer = setTimeout(poll, POLL_MS);
     }
 
+    loadVersion();
     poll();
   </script>
 </body>
