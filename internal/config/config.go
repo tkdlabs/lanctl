@@ -125,14 +125,20 @@ func applyLocalOverride(cfg *Config) error {
 
 	if hostName, vmName, ok := strings.Cut(name, "/"); ok {
 		for i := range cfg.Hosts {
+			if cfg.Hosts[i].Name != hostName {
+				continue
+			}
 			for j := range cfg.Hosts[i].VMs {
-				if cfg.Hosts[i].Name == hostName && cfg.Hosts[i].VMs[j].Name == vmName {
+				if cfg.Hosts[i].VMs[j].Name == vmName {
 					cfg.Hosts[i].VMs[j].Local = true
 					return nil
 				}
 			}
+			return fmt.Errorf("LANCTL_LOCAL_HOST %q: host %q has no VM %q (vms: %s)",
+				name, hostName, vmName, joinOrNone(vmNames(cfg.Hosts[i])))
 		}
-		return fmt.Errorf("LANCTL_LOCAL_HOST %q: no VM %q under host %q", name, vmName, hostName)
+		return fmt.Errorf("LANCTL_LOCAL_HOST %q: no host %q (hosts: %s)",
+			name, hostName, strings.Join(hostNames(cfg), ", "))
 	}
 
 	for i := range cfg.Hosts {
@@ -141,7 +147,34 @@ func applyLocalOverride(cfg *Config) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("LANCTL_LOCAL_HOST %q: no host with that name", name)
+	return fmt.Errorf("LANCTL_LOCAL_HOST %q: no host with that name (hosts: %s)",
+		name, strings.Join(hostNames(cfg), ", "))
+}
+
+// hostNames returns the configured host names for diagnostics.
+func hostNames(cfg *Config) []string {
+	names := make([]string, 0, len(cfg.Hosts))
+	for _, h := range cfg.Hosts {
+		names = append(names, h.Name)
+	}
+	return names
+}
+
+// vmNames returns a host's VM names for diagnostics.
+func vmNames(h Host) []string {
+	names := make([]string, 0, len(h.VMs))
+	for _, vm := range h.VMs {
+		names = append(names, vm.Name)
+	}
+	return names
+}
+
+// joinOrNone joins names for single-line diagnostics.
+func joinOrNone(names []string) string {
+	if len(names) == 0 {
+		return "(none)"
+	}
+	return strings.Join(names, ", ")
 }
 
 // findConfigPath resolves the path to hosts.yaml.

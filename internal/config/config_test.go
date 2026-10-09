@@ -473,8 +473,12 @@ hosts:
     mac: "AA:BB:CC:DD:EE:FF"`)
 
 	t.Setenv("LANCTL_LOCAL_HOST", "ghost")
-	if _, err := LoadFile(path); err == nil {
-		t.Error("expected error for unknown LANCTL_LOCAL_HOST, got nil")
+	_, err := LoadFile(path)
+	if err == nil {
+		t.Fatal("expected error for unknown LANCTL_LOCAL_HOST, got nil")
+	}
+	if !strings.Contains(err.Error(), `"ghost"`) || !strings.Contains(err.Error(), "desktop") {
+		t.Errorf("error %q should name the value and list known hosts", err)
 	}
 }
 
@@ -490,8 +494,46 @@ hosts:
         ip: 192.0.2.21`)
 
 	t.Setenv("LANCTL_LOCAL_HOST", "nas/ghost")
-	if _, err := LoadFile(path); err == nil {
-		t.Error("expected error for unknown VM, got nil")
+	_, err := LoadFile(path)
+	if err == nil {
+		t.Fatal("expected error for unknown VM, got nil")
+	}
+	if !strings.Contains(err.Error(), `"ghost"`) || !strings.Contains(err.Error(), "nas-main") {
+		t.Errorf("error %q should name the VM and list the host's VMs", err)
+	}
+}
+
+func TestLoadFile_LocalHostEnvHostWithoutVMs(t *testing.T) {
+	path := writeConfig(t, `
+hosts:
+  - name: nas
+    ip: 192.0.2.20
+    mac: "11:22:33:44:55:66"`)
+
+	t.Setenv("LANCTL_LOCAL_HOST", "nas/ghost")
+	_, err := LoadFile(path)
+	if err == nil {
+		t.Fatal("expected error for VM on host without VMs, got nil")
+	}
+	if !strings.Contains(err.Error(), "(none)") {
+		t.Errorf("error %q should show an empty VM list", err)
+	}
+}
+
+func TestLoadFile_LocalHostEnvUnknownHostInPair(t *testing.T) {
+	path := writeConfig(t, `
+hosts:
+  - name: nas
+    ip: 192.0.2.20
+    mac: "11:22:33:44:55:66"`)
+
+	t.Setenv("LANCTL_LOCAL_HOST", "ghost/vm")
+	_, err := LoadFile(path)
+	if err == nil {
+		t.Fatal("expected error for unknown host in pair, got nil")
+	}
+	if !strings.Contains(err.Error(), `"ghost"`) || !strings.Contains(err.Error(), "nas") {
+		t.Errorf("error %q should name the host and list known hosts", err)
 	}
 }
 
