@@ -100,6 +100,26 @@ make cross
 sudo ./install.sh
 ```
 
+### Remote install
+
+From any machine with SSH access to the target — no Go toolchain needed on
+either side:
+
+```bash
+# From local dist/ builds (run `make cross` first)
+deploy/install-remote.sh --host mybox --user operator --local-host mybox -y
+
+# Or straight from the latest GitHub release (nothing to build or store)
+deploy/install-remote.sh --host mybox --arch arm64 --source release -y
+```
+
+The target arch is auto-detected (`--arch` overrides), the bundle is streamed
+over SSH into a remote temp dir that is removed afterwards, and `install.sh`
+runs remotely under sudo. Add `--config-remote <url>` to enable config sync
+in the same step. `--dry-run` previews the plan with zero side effects;
+`--help` lists all options (custom dirs, ports, service user, release
+version, extra ssh options).
+
 ## Keeping multiple boxes in sync
 
 Running lanctl on several boxes? Keep one shared `hosts.yaml` in a private
