@@ -180,6 +180,22 @@ cmd_run() {
     while IFS='=' read -r key value; do
       [ -n "$key" ] && export "$key=$value"
     done < <(git_safe_env)
+    # Cross-user ownership (service user vs. repo owner) makes modern git
+    # refuse local remotes. The discovery-time check only trusts config
+    # files, so allowlist the remote in the service user's own gitconfig
+    # (idempotent — the exact remedy git itself prescribes).
+    safe_path="$REMOTE"
+    case "$safe_path" in
+      file://*) safe_path="${safe_path#file://}" ;;
+    esac
+    safe_path="$(realpath -m "$safe_path" 2>/dev/null || echo "$safe_path")"
+    if ! git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$safe_path"; then
+      if git config --global --add safe.directory "$safe_path" 2>/dev/null; then
+        log "allowlisted $safe_path in git safe.directory"
+      else
+        log "warning: cannot update git safe.directory; if clone fails, run as the service user: git config --global --add safe.directory $safe_path"
+      fi
+    fi
   fi
 
   mkdir -p "$WORK_DIR"

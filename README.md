@@ -180,8 +180,8 @@ files in one step (`--git-key` / `--git-known-hosts`).
 On the box hosting the repo itself, skip SSH entirely — set
 `CONFIG_GIT_REMOTE` to the plain local path (e.g.
 `/home/sync/git-repos/lanctl-config`); no key or `known_hosts` is needed.
-Cross-user ownership (service user vs. repo owner) is handled by the sync
-itself via a scoped `safe.directory` allowlist.
+Cross-user ownership (service user vs. repo owner) is handled automatically:
+each run allowlists the remote in the service user's gitconfig.
 
 ## REST API
 

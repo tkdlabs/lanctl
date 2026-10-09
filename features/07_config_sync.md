@@ -88,9 +88,10 @@ The sync runs as the service user, so SSH remotes use an explicit identity:
 `GIT_SSH_COMMAND` (BatchMode, IdentitiesOnly, pinned host key, connect
 timeout). Missing files fail fast naming the variable. Plain local-path
 remotes (the box hosting the repo) skip SSH entirely; since the repo usually
-belongs to another user, the script allowlists it via `safe.directory`
-scoped to its own git invocations (raw + resolved path). A stale mirror dir
-left by a failed clone is detected and re-cloned.
+belongs to another user than the service user, each run allowlists it in the
+service user's own gitconfig (`git config --global --add safe.directory`,
+idempotent) — the discovery-time check only trusts config files, not env.
+A stale mirror dir left by a failed clone is detected and re-cloned.
 
 **Layered kill switches:** `lanctl-sync hold` (sentinel), `systemctl stop`
 during the delay (SIGTERM aborts pre-apply), `systemctl mask
