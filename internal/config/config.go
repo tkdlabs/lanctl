@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,11 +12,17 @@ import (
 
 const defaultSSHKey = "~/.ssh/id_ed25519"
 
+// SupportedConfigVersion is the config schema version this binary reads.
+// A hosts.yaml declaring a newer config_version is rejected so that a
+// config written for a newer binary is never silently misread.
+const SupportedConfigVersion = 1
+
 // Config represents the top-level hosts.yaml configuration.
 type Config struct {
-	SSHKey       string `yaml:"ssh_key,omitempty"`
-	NordVPNToken string `yaml:"nordvpn_token,omitempty"`
-	Hosts        []Host `yaml:"hosts"`
+	ConfigVersion int    `yaml:"config_version,omitempty"`
+	SSHKey        string `yaml:"ssh_key,omitempty"`
+	NordVPNToken  string `yaml:"nordvpn_token,omitempty"`
+	Hosts         []Host `yaml:"hosts"`
 }
 
 // Host represents a single host entry. A Proxmox host has VMs nested under it.
@@ -63,16 +70,33 @@ const (
 // It checks $DEPLOY_DIR/hosts.yaml first, then falls back to the directory
 // of the running binary, then the working directory.
 func Load() (Config, error) {
+	return LoadFile(findConfigPath())
+}
+
+// LoadFile reads and parses the config file at the given path. Decoding is
+// strict: unknown keys fail instead of being silently dropped, so a config
+// written for a newer binary is rejected rather than misread.
+func LoadFile(path string) (Config, error) {
 	cfg := Config{}
 
-	path := findConfigPath()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return cfg, fmt.Errorf("read config %s: %w", path, err)
 	}
 
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
 		return cfg, fmt.Errorf("parse config: %w", err)
+	}
+
+	if cfg.ConfigVersion > SupportedConfigVersion {
+		return cfg, fmt.Errorf("config requires schema v%d; this binary supports v%d — upgrade lanctl first",
+			cfg.ConfigVersion, SupportedConfigVersion)
+	}
+
+	if err := applyLocalOverride(&cfg); err != nil {
+		return cfg, err
 	}
 
 	if len(cfg.Hosts) == 0 {
@@ -80,6 +104,44 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// applyLocalOverride honors $LANCTL_LOCAL_HOST: a host name, or "host/vm" to
+// mark a VM local. The env var is authoritative — YAML-declared local flags
+// are cleared first — so one shared hosts.yaml can serve every box, with each
+// box self-identifying via its own environment.
+func applyLocalOverride(cfg *Config) error {
+	name := os.Getenv("LANCTL_LOCAL_HOST")
+	if name == "" {
+		return nil
+	}
+
+	for i := range cfg.Hosts {
+		cfg.Hosts[i].Local = false
+		for j := range cfg.Hosts[i].VMs {
+			cfg.Hosts[i].VMs[j].Local = false
+		}
+	}
+
+	if hostName, vmName, ok := strings.Cut(name, "/"); ok {
+		for i := range cfg.Hosts {
+			for j := range cfg.Hosts[i].VMs {
+				if cfg.Hosts[i].Name == hostName && cfg.Hosts[i].VMs[j].Name == vmName {
+					cfg.Hosts[i].VMs[j].Local = true
+					return nil
+				}
+			}
+		}
+		return fmt.Errorf("LANCTL_LOCAL_HOST %q: no VM %q under host %q", name, vmName, hostName)
+	}
+
+	for i := range cfg.Hosts {
+		if cfg.Hosts[i].Name == name {
+			cfg.Hosts[i].Local = true
+			return nil
+		}
+	}
+	return fmt.Errorf("LANCTL_LOCAL_HOST %q: no host with that name", name)
 }
 
 // findConfigPath resolves the path to hosts.yaml.

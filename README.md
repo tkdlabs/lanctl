@@ -10,6 +10,9 @@ logs, and repair NordVPN meshnet connectivity — from your browser.
 - **SSH connection pooling** — reuse one SSH connection per host for all operations.
 - **Cross-compiles** to `amd64`, `arm64`, and `arm` (Raspberry Pi).
 - **Small** — ~9 MB static binary.
+- **Live config** — `hosts.yaml` is re-read on every request, so adding,
+  editing, or removing a host takes effect immediately with no restart.
+  (`PORT` and other process-level settings still need a restart.)
 
 ## Quick start
 
@@ -96,6 +99,40 @@ make cross
 #      dist/lanctl-linux-arm   (32-bit Raspbian) to the Pi, then:
 sudo ./install.sh
 ```
+
+## Keeping multiple boxes in sync
+
+Running lanctl on several boxes? Keep one shared `hosts.yaml` in a private
+git repo and let each box pull it — the file stays byte-identical everywhere:
+
+1. In the shared file, omit `local:` and give every host (including self) an
+   `ssh_user`. Prefer the global/default `ssh_key` so key paths resolve
+   identically on all boxes.
+2. On each box, set its identity in `$DEPLOY_DIR/.env`:
+   `LANCTL_LOCAL_HOST=<this box's host name>` (or `<host>/<vm>`). The shared
+   file's entries are marked local/cleared per box at load time.
+3. Point the box at the private repo and install:
+   `sudo CONFIG_GIT_REMOTE=git@config-repo.local:~/git-repos/lanctl-config.git
+   LANCTL_LOCAL_HOST=mybox ./install.sh`
+   This installs `lanctl-sync.sh` plus a timer that polls every 15 minutes.
+
+Each poll fetches, validates with `lanctl --check`, waits 5 minutes, then
+atomically swaps the file — no restart needed (see Live config above). A bad
+config (unknown keys, or a `config_version` newer than the binary) is rejected
+and the last-known-good file keeps serving. Validate manually any time:
+
+```bash
+lanctl --check                        # current file
+lanctl --check --config /path/to/hosts.yaml
+```
+
+Emergency brakes: `lanctl-sync.sh hold` (sentinel file), `systemctl stop
+lanctl-sync` during the delay window, or `systemctl mask
+lanctl-sync.timer`. `lanctl-sync.sh status` shows the last sync state.
+`hosts.yaml.last-good` is kept as a backup on every apply.
+
+Treat the shared file as secret (MACs, IPs, SSH users, tokens): private repo
+only, mode `0600`, never in tracked files.
 
 ## REST API
 

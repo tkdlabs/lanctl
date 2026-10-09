@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,11 +13,31 @@ import (
 	"time"
 
 	"github.com/tkdlabs/lanctl/internal/api"
+	"github.com/tkdlabs/lanctl/internal/config"
 	"github.com/tkdlabs/lanctl/internal/frontend"
 	"github.com/tkdlabs/lanctl/internal/version"
 )
 
 func main() {
+	checkFlag := flag.Bool("check", false, "validate hosts.yaml and exit (0 = valid)")
+	configFlag := flag.String("config", "", "validate the config at this path instead of the resolved hosts.yaml")
+	flag.Parse()
+
+	if *checkFlag {
+		var cfg config.Config
+		var err error
+		if *configFlag != "" {
+			cfg, err = config.LoadFile(*configFlag)
+		} else {
+			cfg, err = config.Load()
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "config invalid: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("config OK: %d host(s)\n", len(cfg.Hosts))
+		return
+	}
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8003"

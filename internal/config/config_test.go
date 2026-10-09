@@ -3,8 +3,20 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// writeConfig writes YAML data to a temp dir and returns its path.
+func writeConfig(t *testing.T, data string) string {
+	t.Helper()
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "hosts.yaml")
+	if err := os.WriteFile(cfgPath, []byte(data), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return cfgPath
+}
 
 func TestLoad_ValidConfig(t *testing.T) {
 	dir := t.TempDir()
@@ -331,5 +343,178 @@ func TestExpandTilde(t *testing.T) {
 	}
 	if got := expandTilde("/abs/path"); got != "/abs/path" {
 		t.Errorf("expandTilde(/abs/path) = %q, want %q", got, "/abs/path")
+	}
+}
+
+func TestLoadFile_StrictUnknownKey(t *testing.T) {
+	path := writeConfig(t, `
+hosts:
+  - name: desktop
+    ip: 192.0.2.10
+    mac: "AA:BB:CC:DD:EE:FF"
+    future_option: true`)
+
+	if _, err := LoadFile(path); err == nil {
+		t.Error("expected error for unknown key, got nil")
+	}
+}
+
+func TestLoadFile_StrictUnknownNestedKey(t *testing.T) {
+	path := writeConfig(t, `
+hosts:
+  - name: nas
+    type: proxmox
+    ip: 192.0.2.20
+    mac: "11:22:33:44:55:66"
+    vms:
+      - name: nas-main
+        ip: 192.0.2.21
+        typo_field: x`)
+
+	if _, err := LoadFile(path); err == nil {
+		t.Error("expected error for unknown nested key, got nil")
+	}
+}
+
+func TestLoadFile_ConfigVersionCurrent(t *testing.T) {
+	path := writeConfig(t, `
+config_version: 1
+hosts:
+  - name: desktop
+    ip: 192.0.2.10
+    mac: "AA:BB:CC:DD:EE:FF"`)
+
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error: %v", err)
+	}
+	if cfg.ConfigVersion != 1 {
+		t.Errorf("ConfigVersion = %d, want 1", cfg.ConfigVersion)
+	}
+}
+
+func TestLoadFile_ConfigVersionTooNew(t *testing.T) {
+	path := writeConfig(t, `
+config_version: 999
+hosts:
+  - name: desktop
+    ip: 192.0.2.10
+    mac: "AA:BB:CC:DD:EE:FF"`)
+
+	_, err := LoadFile(path)
+	if err == nil {
+		t.Fatal("expected error for newer config_version, got nil")
+	}
+	if !strings.Contains(err.Error(), "upgrade") {
+		t.Errorf("error %q should mention upgrading", err)
+	}
+}
+
+func TestLoadFile_LocalHostEnvOverridesYAML(t *testing.T) {
+	path := writeConfig(t, `
+hosts:
+  - name: box-a
+    ip: 192.0.2.10
+    mac: "AA:BB:CC:DD:EE:FF"
+    ssh_user: operator
+  - name: box-b
+    ip: 192.0.2.11
+    mac: "11:22:33:44:55:66"
+    ssh_user: operator
+    local: true`)
+
+	t.Setenv("LANCTL_LOCAL_HOST", "box-a")
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error: %v", err)
+	}
+
+	if !cfg.Hosts[0].Local {
+		t.Error("Hosts[0].Local = false, want true (env override)")
+	}
+	if cfg.Hosts[1].Local {
+		t.Error("Hosts[1].Local = true, want false (YAML local cleared)")
+	}
+}
+
+func TestLoadFile_LocalHostEnvVM(t *testing.T) {
+	path := writeConfig(t, `
+hosts:
+  - name: nas
+    type: proxmox
+    ip: 192.0.2.20
+    mac: "11:22:33:44:55:66"
+    ssh_user: admin
+    vms:
+      - name: nas-main
+        vmid: 100
+        ip: 192.0.2.21
+        ssh_user: operator`)
+
+	t.Setenv("LANCTL_LOCAL_HOST", "nas/nas-main")
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error: %v", err)
+	}
+
+	if cfg.Hosts[0].Local {
+		t.Error("Hosts[0].Local = true, want false")
+	}
+	if !cfg.Hosts[0].VMs[0].Local {
+		t.Error("VMs[0].Local = false, want true (env override)")
+	}
+}
+
+func TestLoadFile_LocalHostEnvUnknownHost(t *testing.T) {
+	path := writeConfig(t, `
+hosts:
+  - name: desktop
+    ip: 192.0.2.10
+    mac: "AA:BB:CC:DD:EE:FF"`)
+
+	t.Setenv("LANCTL_LOCAL_HOST", "ghost")
+	if _, err := LoadFile(path); err == nil {
+		t.Error("expected error for unknown LANCTL_LOCAL_HOST, got nil")
+	}
+}
+
+func TestLoadFile_LocalHostEnvUnknownVM(t *testing.T) {
+	path := writeConfig(t, `
+hosts:
+  - name: nas
+    type: proxmox
+    ip: 192.0.2.20
+    mac: "11:22:33:44:55:66"
+    vms:
+      - name: nas-main
+        ip: 192.0.2.21`)
+
+	t.Setenv("LANCTL_LOCAL_HOST", "nas/ghost")
+	if _, err := LoadFile(path); err == nil {
+		t.Error("expected error for unknown VM, got nil")
+	}
+}
+
+func TestLoadFile_LocalHostEnvUnsetPreservesYAML(t *testing.T) {
+	path := writeConfig(t, `
+hosts:
+  - name: self
+    ip: 192.0.2.10
+    mac: "AA:BB:CC:DD:EE:FF"
+    local: true`)
+
+	prev, hadPrev := os.LookupEnv("LANCTL_LOCAL_HOST")
+	os.Unsetenv("LANCTL_LOCAL_HOST")
+	t.Cleanup(func() {
+		if hadPrev {
+			os.Setenv("LANCTL_LOCAL_HOST", prev)
+		}
+	})
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error: %v", err)
+	}
+	if !cfg.Hosts[0].Local {
+		t.Error("Hosts[0].Local = false, want true (YAML honored without env)")
 	}
 }

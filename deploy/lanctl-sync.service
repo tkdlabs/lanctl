@@ -1,0 +1,14 @@
+[Unit]
+Description=lanctl config sync — apply shared hosts.yaml
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=@RUN_USER@
+WorkingDirectory=@DEPLOY_DIR@
+EnvironmentFile=@DEPLOY_DIR@/.env
+ExecStart=@DEPLOY_DIR@/lanctl-sync.sh run
+# Must exceed SYNC_DELAY so the apply-delay sleep is never cut short.
+TimeoutStartSec=900
+KillMode=mixed

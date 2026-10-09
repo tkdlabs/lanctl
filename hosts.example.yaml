@@ -1,5 +1,16 @@
 # Copy this file to hosts.yaml and fill in your hosts.
 # hosts.yaml is gitignored.
+#
+# Schema version read by this binary. A binary rejects a file declaring a
+# newer version — upgrade lanctl before using a newer config.
+config_version: 1
+#
+# Syncing one file across boxes: omit `local:` everywhere and set
+# LANCTL_LOCAL_HOST=<name> (or <host>/<vm>) in each box's .env instead.
+# Each box then marks its own entry local and clears the rest, so the shared
+# file stays byte-identical. Give every host (including self) an ssh_user so
+# other boxes can reach it over SSH; prefer the global/default ssh_key so
+# key paths resolve identically on all boxes.
 
 # Optional: default SSH identity file used for all remote hosts.
 # Override per-host with ssh_key: on individual host entries.
@@ -17,6 +28,7 @@ hosts:
     ip: 192.168.0.236       # used only for display
     mac: "AA:BB:CC:DD:EE:FF"
     local: true
+    # ssh_user: tom            # add when sharing this file across boxes (see note at top)
     services:
       - lanctl-backend
     # user_services:                 # systemd --user units of the lanctl
