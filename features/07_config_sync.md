@@ -114,6 +114,8 @@ private config repo — never in tracked files, examples, commits, or issues.
       its own correct local host.
 - [ ] Unknown YAML key fails `Load`/`--check`.
 - [ ] `config_version` newer than the binary fails with an upgrade message.
+- [ ] A validator binary without `--check` support is refused before use
+      (pre-`v0.2.0` binaries ignore argv and would start a server instead).
 - [ ] Bad staged config never replaces last-known-good; failure is visible
       (`state.json`, journal, non-zero exit).
 - [ ] `hold` blocks; stopping during the delay aborts pre-apply.

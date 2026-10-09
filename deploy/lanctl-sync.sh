@@ -138,6 +138,20 @@ git_ssh_command() {
     "$key" "$known"
 }
 
+# CHECK_MARKER: usage text of the --check flag. Binaries predating --check
+# (v0.2.0) lack it; run as validators they ignore argv and start a server
+# instead (port clash or worse). Greping the binary never executes it, and
+# usage strings survive stripped (-s -w) builds.
+CHECK_MARKER="validate hosts.yaml and exit"
+
+# check_validator: refuse a $BIN without --check support.
+check_validator() {
+  if grep -a -q -F "$CHECK_MARKER" "$BIN" 2>/dev/null; then
+    return 0
+  fi
+  echo "validator $BIN lacks --check support — upgrade lanctl to v0.2.0 or newer" >&2
+  return 1
+}
 # git_safe_env: print VAR=value lines git needs for this remote. Local-path
 # remotes live outside the service user's ownership (e.g. root reading an
 # admin's repo), which modern git refuses as "dubious ownership" — allowlist
@@ -167,6 +181,9 @@ cmd_run() {
   fi
   [ -n "$REMOTE" ] || fail "CONFIG_GIT_REMOTE is not set; refusing to sync from nowhere"
   [ -x "$BIN" ] || fail "validator $BIN is missing or not executable"
+  if ! verr="$(check_validator 2>&1 >/dev/null)"; then
+    fail "validator check: $verr"
+  fi
   command -v git >/dev/null 2>&1 || fail "git is not installed"
 
   # SSH remotes need an explicit identity for the service user; local paths

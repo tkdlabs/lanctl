@@ -151,6 +151,10 @@ lanctl-sync` during the delay window, or `systemctl mask
 lanctl-sync.timer`. `lanctl-sync.sh status` shows the last sync state.
 `hosts.yaml.last-good` is kept as a backup on every apply.
 
+If a run reports the validator `lacks --check support`, the box's `lanctl`
+binary predates `v0.2.0` — refresh it (`install-remote.sh --source release`)
+and re-run; the staged config is left untouched.
+
 Treat the shared file as secret (MACs, IPs, SSH users, tokens): private repo
 only, mode `0600`, never in tracked files.
 
