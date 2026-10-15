@@ -100,8 +100,11 @@ sudo systemctl restart lanctl
 
 `install.sh` installs the binary and frontend to `DEPLOY_DIR` (default
 `/opt/lanctl`), writes an `EnvironmentFile`, installs `lanctl.service`, and
-starts it. Override with environment variables, e.g.
-`sudo DEPLOY_DIR=/srv/lanctl PORT=8080 ./install.sh`.
+starts it. Set the directory with `--dir` (or `DEPLOY_DIR`), and any other
+setting with environment variables, e.g.
+`sudo ./install.sh --dir /srv/lanctl` or
+`sudo DEPLOY_DIR=/srv/lanctl PORT=8080 ./install.sh`. Unknown flags are
+rejected, so a typo can't silently fall back to the default directory.
 
 ### Raspberry Pi
 

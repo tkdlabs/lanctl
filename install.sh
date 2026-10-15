@@ -7,7 +7,11 @@
 #
 # Usage:
 #   sudo ./install.sh
+#   sudo ./install.sh --dir /srv/lanctl
 #   sudo DEPLOY_DIR=/opt/lanctl PORT=8003 RUN_USER=lanctl ./install.sh
+#
+#   --dir DIR            Install directory (overrides $DEPLOY_DIR)
+#   -h, --help           Show usage and exit
 #
 # Environment variables (all optional):
 #   DEPLOY_DIR           Install directory                (default: /opt/lanctl)
@@ -39,7 +43,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-DEPLOY_DIR="${DEPLOY_DIR:-/opt/lanctl}"
 RUN_USER="${RUN_USER:-root}"
 SERVICE_NAME="${SERVICE_NAME:-lanctl}"
 SYNC_SERVICE_NAME="${SYNC_SERVICE_NAME:-lanctl-sync}"
@@ -52,6 +55,36 @@ SYNC_SERVICE_SRC="$SCRIPT_DIR/deploy/lanctl-sync.service"
 SYNC_TIMER_SRC="$SCRIPT_DIR/deploy/lanctl-sync.timer"
 
 die() { echo "error: $*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+usage: install.sh [--dir DIR] [--help]
+
+  --dir DIR   install directory (default: /opt/lanctl)
+  -h, --help  show this help
+
+Every setting can also be given as an environment variable; see the header of
+this script for the full list (DEPLOY_DIR, PORT, RUN_USER, SERVICE_NAME, ...).
+EOF
+  exit "${1:-0}"
+}
+
+# Parse flags. --dir is the flag form of DEPLOY_DIR and wins over it. Unknown
+# flags are rejected rather than ignored: a typo used to fall back to the
+# default directory silently, leaving the service pointing at a directory
+# without the real hosts.yaml.
+dir_flag=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dir)     [ $# -ge 2 ] || die "--dir requires a directory argument"; dir_flag="$2"; shift 2 ;;
+    --dir=*)   dir_flag="${1#--dir=}"; shift ;;
+    -h|--help) usage 0 ;;
+    -*)        die "unknown option $1 (see --help)" ;;
+    *)         die "unexpected argument $1 (see --help)" ;;
+  esac
+done
+
+DEPLOY_DIR="${dir_flag:-${DEPLOY_DIR:-/opt/lanctl}}"
 
 [ "$(id -u)" -eq 0 ] || die "must be run as root (try: sudo ./install.sh)"
 [ -f "$UNIT_SRC" ] || die "missing $UNIT_SRC"
