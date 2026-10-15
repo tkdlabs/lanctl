@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -143,12 +144,31 @@ func checkConfig(cfg config.Config, report *Report) {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	runAs := processUser()
 	for _, key := range keys {
 		targets := missing[key]
 		sort.Strings(targets)
-		report.add(LevelWarning, "missing_ssh_key",
-			fmt.Sprintf("SSH key %s not found for: %s", key, strings.Join(targets, ", ")))
+		msg := fmt.Sprintf("SSH key %s not found for: %s", key, strings.Join(targets, ", "))
+		if runAs != "" {
+			msg += fmt.Sprintf(" (lanctl reads keys as %s; the key must be readable by that user)", runAs)
+		}
+		report.add(LevelWarning, "missing_ssh_key", msg)
 	}
+}
+
+// processUser names the user the running process reads SSH keys as. A default
+// key path resolves against this user's home, which is not necessarily the
+// interactive login user, so the notice spells it out.
+func processUser() string {
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		return u.Username
+	}
+	for _, k := range []string{"USER", "LOGNAME"} {
+		if v := os.Getenv(k); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // checkSync reads the config-sync state written by deploy/lanctl-sync.sh and

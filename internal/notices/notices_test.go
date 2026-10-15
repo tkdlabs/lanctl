@@ -255,6 +255,34 @@ func TestDefaultSSHKeyMissing(t *testing.T) {
 	}
 }
 
+// TestMissingSSHKeyNamesProcessUser checks the notice explains whose home the
+// key path belongs to, since the service user may differ from the operator.
+func TestMissingSSHKeyNamesProcessUser(t *testing.T) {
+	setup(t, `hosts:
+  - name: box
+    ip: 192.0.2.10
+    mac: "aa:bb:cc:dd:ee:01"
+    local: true
+  - name: nas
+    ip: 192.0.2.20
+    mac: "aa:bb:cc:dd:ee:02"
+    ssh_key: /tmp/lanctl-missing-key-xyz
+`)
+	want := processUser()
+	if want == "" {
+		t.Skip("no process user resolvable in this environment")
+	}
+
+	rep := Build("dev", time.Now())
+	n, ok := noticeByCode(rep, "missing_ssh_key")
+	if !ok {
+		t.Fatalf("missing missing_ssh_key notice: %+v", rep.Notices)
+	}
+	if !strings.Contains(n.Message, "lanctl reads keys as "+want) {
+		t.Errorf("message = %q, want it to name process user %q", n.Message, want)
+	}
+}
+
 func TestSyncOKFresh(t *testing.T) {
 	dir := setup(t, localHostYAML)
 	t.Setenv("CONFIG_GIT_REMOTE", "git@example.com:cfg.git")

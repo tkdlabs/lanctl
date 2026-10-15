@@ -73,6 +73,18 @@ hosts:
   lanctl process user's manager. Status, logs, and start/stop/restart all
   respect the scope; logs are read with `journalctl --user`.
 
+> **SSH keys are read as the lanctl process user, not as you.** `ssh_key` (and
+> the `~` inside it) is resolved by the running process. Installed as a systemd
+> service it runs as `RUN_USER` (`root` by default), so the default
+> `~/.ssh/id_ed25519` means `/root/.ssh/id_ed25519` — a different file from your
+> login shell's key, and the reason a warning can appear even though *your*
+> keyless SSH works. That user must own or be able to read the key, and its
+> public key must be authorized for each host's `ssh_user`. To reuse your own
+> key, point `ssh_key` at it explicitly (e.g. `/home/tom/.ssh/id_ed25519`); to
+> follow the shared-config model, provision a key in the service user's home on
+> every box instead. The same rule is described for the config repo under
+> "Sync SSH access".
+
 See `hosts.example.yaml` for the full annotated schema.
 
 ## Install as a service
