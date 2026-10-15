@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -48,5 +49,29 @@ func TestAttach_MissingFileReturns404(t *testing.T) {
 	mux.ServeHTTP(rr, httptest.NewRequest("GET", "/", nil))
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", rr.Code)
+	}
+}
+
+// TestIndexHTML_SurfacesHostsErrors guards the dashboard against showing a
+// bare "Error: HTTP 500" with no explanation when /api/hosts fails: the page
+// must read the server's {"detail": ...} message and must render the notices
+// banner even when the hosts request fails. The frontend is static HTML/JS, so
+// this asserts on the shipped source rather than executing it.
+func TestIndexHTML_SurfacesHostsErrors(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "frontend", "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(data)
+
+	// A shared reader that turns a non-2xx response into the server's message
+	// instead of "HTTP <status>".
+	if !strings.Contains(src, "fetchJSON") {
+		t.Error("index.html: no shared fetch helper; the JSON error detail is likely discarded")
+	}
+	// Hosts and notices are fetched independently, so a failing /api/hosts
+	// does not skip renderNotices (the banner that explains the failure).
+	if !strings.Contains(src, "Promise.allSettled") {
+		t.Error("index.html: hosts/notices fetches are coupled; a hosts error hides the notices banner")
 	}
 }

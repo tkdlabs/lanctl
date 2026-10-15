@@ -276,16 +276,27 @@
         .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
+    // fetchJSON returns the parsed body, or throws with the server's own
+    // message (the API's {"detail": ...} error shape) rather than a bare
+    // "HTTP <status>", so a broken config is debuggable from the browser.
+    async function fetchJSON(url) {
+      const res = await fetch(url);
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
+      if (!res.ok) {
+        const detail = (data && (data.detail || data.error)) || text.trim() || `HTTP ${res.status}`;
+        throw new Error(detail);
+      }
+      return data;
+    }
+
     async function fetchHosts() {
-      const res = await fetch('/api/hosts');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json();
+      return fetchJSON('/api/hosts');
     }
 
     async function fetchNotices() {
-      const res = await fetch('/api/notices');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json();
+      return fetchJSON('/api/notices');
     }
 
     async function loadVersion() {
@@ -604,17 +615,18 @@
     }
 
     async function poll() {
-      try {
-        const [hosts, report] = await Promise.all([
-          fetchHosts(),
-          fetchNotices().catch(() => null),
-        ]);
-        renderHosts(hosts);
-        renderNotices(report);
-        document.getElementById('status-bar').textContent =
+      // Fetch independently: a hosts failure must not suppress the notices
+      // banner, which is where a config problem is actually explained.
+      const [hosts, report] = await Promise.allSettled([fetchHosts(), fetchNotices()]);
+      renderNotices(report.status === 'fulfilled' ? report.value : null);
+
+      const bar = document.getElementById('status-bar');
+      if (hosts.status === 'fulfilled') {
+        renderHosts(hosts.value);
+        bar.textContent =
           `Last updated: ${new Date().toLocaleTimeString()} · refreshes every ${POLL_MS / 1000}s`;
-      } catch (e) {
-        document.getElementById('status-bar').textContent = `Error: ${e.message}`;
+      } else {
+        bar.textContent = `Error: ${hosts.reason.message}`;
       }
       pollTimer = setTimeout(poll, POLL_MS);
     }
