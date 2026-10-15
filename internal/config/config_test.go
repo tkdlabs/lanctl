@@ -229,8 +229,8 @@ func TestResolveSSHKey_Cascade(t *testing.T) {
 	}
 
 	cfgNoKey := Config{}
-	if got := ResolveSSHKey(cfgNoKey, hostNoKey); got != "~/.ssh/id_ed25519" {
-		t.Errorf("ResolveSSHKey default = %q, want %q", got, "~/.ssh/id_ed25519")
+	if got := ResolveSSHKey(cfgNoKey, hostNoKey); got != "/home/user/.ssh/id_ed25519" {
+		t.Errorf("ResolveSSHKey default = %q, want %q", got, "/home/user/.ssh/id_ed25519")
 	}
 }
 
@@ -258,8 +258,8 @@ func TestResolveVMSSHKey_Cascade(t *testing.T) {
 	}
 
 	cfg2 := Config{}
-	if got := ResolveVMSSHKey(cfg2, host2, vm3); got != "~/.ssh/id_ed25519" {
-		t.Errorf("default = %q, want %q", got, "~/.ssh/id_ed25519")
+	if got := ResolveVMSSHKey(cfg2, host2, vm3); got != "/home/user/.ssh/id_ed25519" {
+		t.Errorf("default = %q, want %q", got, "/home/user/.ssh/id_ed25519")
 	}
 }
 

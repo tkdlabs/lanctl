@@ -236,7 +236,10 @@ func GetHost(cfg Config, name string) (Host, bool) {
 }
 
 // ResolveSSHKey resolves the SSH key path for a host using the cascade:
-// host SSHKey → global Config.SSHKey → default.
+// host SSHKey → global Config.SSHKey → default. The returned path always has a
+// leading ~ expanded, so callers that stat or open it (not just the SSH dialer)
+// see the real location; the unexpanded default previously produced false
+// "missing key" diagnostics.
 func ResolveSSHKey(cfg Config, h Host) string {
 	if h.SSHKey != "" {
 		return ExpandTilde(h.SSHKey)
@@ -244,11 +247,12 @@ func ResolveSSHKey(cfg Config, h Host) string {
 	if cfg.SSHKey != "" {
 		return ExpandTilde(cfg.SSHKey)
 	}
-	return defaultSSHKey
+	return ExpandTilde(defaultSSHKey)
 }
 
 // ResolveVMSSHKey resolves the SSH key path for a VM using the cascade:
-// VM SSHKey → parent Host SSHKey → global Config.SSHKey → default.
+// VM SSHKey → parent Host SSHKey → global Config.SSHKey → default. Like
+// ResolveSSHKey, the result has a leading ~ expanded.
 func ResolveVMSSHKey(cfg Config, host Host, vm VM) string {
 	if vm.SSHKey != "" {
 		return ExpandTilde(vm.SSHKey)
@@ -259,7 +263,7 @@ func ResolveVMSSHKey(cfg Config, host Host, vm VM) string {
 	if cfg.SSHKey != "" {
 		return ExpandTilde(cfg.SSHKey)
 	}
-	return defaultSSHKey
+	return ExpandTilde(defaultSSHKey)
 }
 
 // FindService resolves a host's configured service name to its systemd scope.

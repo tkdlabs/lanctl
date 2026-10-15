@@ -3,6 +3,7 @@ package notices
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -202,6 +203,55 @@ func TestSSHKeyPresent(t *testing.T) {
 	rep := Build("dev", time.Now())
 	if _, ok := noticeByCode(rep, "missing_ssh_key"); ok {
 		t.Errorf("unexpected missing_ssh_key: %+v", rep.Notices)
+	}
+}
+
+// TestDefaultSSHKeyPresent guards against the false positive where a host that
+// inherits the default key (no ssh_key configured) was warned about because the
+// unexpanded "~/.ssh/id_ed25519" was stat'd relative to the cwd.
+func TestDefaultSSHKeyPresent(t *testing.T) {
+	setup(t, `hosts:
+  - name: box
+    ip: 192.0.2.10
+    mac: "aa:bb:cc:dd:ee:01"
+    local: true
+  - name: nas
+    ip: 192.0.2.20
+    mac: "aa:bb:cc:dd:ee:02"
+`)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeFile(t, filepath.Join(home, ".ssh", "id_ed25519"), "key")
+
+	rep := Build("dev", time.Now())
+	if n, ok := noticeByCode(rep, "missing_ssh_key"); ok {
+		t.Errorf("unexpected missing_ssh_key for present default key: %+v", n)
+	}
+}
+
+// TestDefaultSSHKeyMissing checks the warning still fires, and names the
+// expanded default path rather than the literal tilde form.
+func TestDefaultSSHKeyMissing(t *testing.T) {
+	setup(t, `hosts:
+  - name: box
+    ip: 192.0.2.10
+    mac: "aa:bb:cc:dd:ee:01"
+    local: true
+  - name: nas
+    ip: 192.0.2.20
+    mac: "aa:bb:cc:dd:ee:02"
+`)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	rep := Build("dev", time.Now())
+	n, ok := noticeByCode(rep, "missing_ssh_key")
+	if !ok {
+		t.Fatalf("missing missing_ssh_key notice: %+v", rep.Notices)
+	}
+	want := filepath.Join(home, ".ssh", "id_ed25519")
+	if !strings.Contains(n.Message, want) {
+		t.Errorf("message = %q, want expanded path %q", n.Message, want)
 	}
 }
 
