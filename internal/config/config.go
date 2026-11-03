@@ -104,6 +104,7 @@ func LoadFile(path string) (Config, error) {
 	if err := applyLocalOverride(&cfg); err != nil {
 		return cfg, err
 	}
+	applySecretEnvOverrides(&cfg)
 
 	if len(cfg.Hosts) == 0 {
 		return cfg, fmt.Errorf("no hosts found in %s. Copy hosts.example.yaml and edit it", path)
@@ -155,6 +156,15 @@ func applyLocalOverride(cfg *Config) error {
 	}
 	return fmt.Errorf("LANCTL_LOCAL_HOST %q: no host with that name (hosts: %s)",
 		name, strings.Join(hostNames(cfg), ", "))
+}
+
+// applySecretEnvOverrides lets process-level secrets override hosts.yaml.
+// This keeps a shared config file free of tokens when a box injects them via
+// its EnvironmentFile; an empty variable leaves the YAML value in place.
+func applySecretEnvOverrides(cfg *Config) {
+	if v := os.Getenv("NORDVPN_TOKEN"); v != "" {
+		cfg.NordVPNToken = v
+	}
 }
 
 // hostNames returns the configured host names for diagnostics.

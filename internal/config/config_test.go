@@ -19,6 +19,7 @@ func writeConfig(t *testing.T, data string) string {
 }
 
 func TestLoad_ValidConfig(t *testing.T) {
+	t.Setenv("NORDVPN_TOKEN", "")
 	dir := t.TempDir()
 
 	yamlData := `
@@ -78,6 +79,42 @@ hosts:
 	h1 := cfg.Hosts[1]
 	if !h1.Local {
 		t.Error("Hosts[1].Local = false, want true")
+	}
+}
+
+func TestLoadFile_NordVPNTokenEnvOverride(t *testing.T) {
+	t.Setenv("NORDVPN_TOKEN", "env-token")
+	path := writeConfig(t, `
+nordvpn_token: yaml-token
+hosts:
+  - name: desktop
+    ip: 192.0.2.10
+    mac: "AA:BB:CC:DD:EE:FF"`)
+
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error: %v", err)
+	}
+	if cfg.NordVPNToken != "env-token" {
+		t.Errorf("NordVPNToken = %q, want env-token", cfg.NordVPNToken)
+	}
+}
+
+func TestLoadFile_NordVPNTokenEnvEmptyKeepsYAML(t *testing.T) {
+	t.Setenv("NORDVPN_TOKEN", "")
+	path := writeConfig(t, `
+nordvpn_token: yaml-token
+hosts:
+  - name: desktop
+    ip: 192.0.2.10
+    mac: "AA:BB:CC:DD:EE:FF"`)
+
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error: %v", err)
+	}
+	if cfg.NordVPNToken != "yaml-token" {
+		t.Errorf("NordVPNToken = %q, want yaml-token", cfg.NordVPNToken)
 	}
 }
 

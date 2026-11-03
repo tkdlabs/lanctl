@@ -65,7 +65,9 @@ hosts:
 - `local: true` marks the machine running `lanctl` itself (skips SSH).
 - `mac` is required for Wake-on-LAN; `ip` is used for reachability checks.
 - `ssh_key` can be set globally or per host/VM (default `~/.ssh/id_ed25519`).
-- `nordvpn_token` enables the VPN repair action (or set per host).
+- `nordvpn_token` enables the VPN repair action (or set per host). It can also
+  be supplied as `NORDVPN_TOKEN` in the environment; the environment wins over
+  `hosts.yaml`, so a shared config can omit the token.
 - `services` are system units (`systemctl`); `user_services` are systemd user
   units (`systemctl --user`). For remote hosts these run in the SSH user's
   user manager, so that user needs lingering enabled
@@ -105,6 +107,13 @@ setting with environment variables, e.g.
 `sudo ./install.sh --dir /srv/lanctl` or
 `sudo DEPLOY_DIR=/srv/lanctl PORT=8080 ./install.sh`. Unknown flags are
 rejected, so a typo can't silently fall back to the default directory.
+
+Secrets such as `NORDVPN_TOKEN` can come from the environment instead of
+`hosts.yaml`; `install.sh` writes them to the mode-`0600` `.env`, quoted for
+systemd, and keeps them across reinstalls. For a remote install, put them in a
+local file and pass `--env-file FILE` — the file is uploaded over SSH and
+appended to the target's `.env`, so the values never appear in process
+arguments or dry-run output.
 
 ### Raspberry Pi
 

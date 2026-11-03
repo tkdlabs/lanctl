@@ -19,6 +19,7 @@ config_version: 1
 
 # Optional: NordVPN access token for headless VPN repair.
 # Generate at: https://my.nordaccount.com/dashboard/nordvpn/access-tokens/
+# Can also be supplied as NORDVPN_TOKEN in the environment (the env wins).
 # nordvpn_token: "your-access-token-here"
 
 hosts:

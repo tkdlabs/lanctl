@@ -53,6 +53,8 @@ usage: install-remote.sh --host HOST [options]
   --sync-delay SECS  SYNC_DELAY for the target (default: 300)
   --git-key FILE     local private key to provision as the target's sync key
   --git-known-hosts FILE  local known_hosts to provision for the repo host
+  --env-file FILE    extra EnvironmentFile fragment, uploaded securely and
+                     appended to the target's .env (secrets stay out of argv)
   --ssh-opt OPT      extra ssh option (repeatable)
   -y, --yes          skip confirmation prompt
   -n, --dry-run      print the plan; change nothing
@@ -96,7 +98,7 @@ main() {
   local repo="tkdlabs/lanctl" remote_dir="/opt/lanctl" service_port="8003"
   local run_user="root" service_name="lanctl" allow_shutdown="1"
   local local_host="" config_remote="" config_branch="main" sync_delay="300"
-  local git_key="" git_known=""
+  local git_key="" git_known="" env_file=""
   local yes=0 dryrun=0
   local -a ssh_opts=()
 
@@ -118,6 +120,7 @@ main() {
       --sync-delay)    sync_delay="$2"; shift 2 ;;
       --git-key)       git_key="$2"; shift 2 ;;
       --git-known-hosts) git_known="$2"; shift 2 ;;
+      --env-file)      [ $# -ge 2 ] || die "--env-file requires a file"; env_file="$2"; shift 2 ;;
       --ssh-opt)       ssh_opts+=("$2"); shift 2 ;;
       -y|--yes)        yes=1; shift ;;
       -n|--dry-run)    dryrun=1; shift ;;
@@ -137,6 +140,10 @@ main() {
   fi
   command -v ssh >/dev/null 2>&1 || die "ssh is not installed"
   command -v tar >/dev/null 2>&1 || die "tar is not installed"
+  if [ -n "$env_file" ]; then
+    [ -f "$env_file" ] || die "--env-file $env_file not found"
+    [ -r "$env_file" ] || die "--env-file $env_file is not readable"
+  fi
 
   local -a ssh_base=(ssh -p "$ssh_port" "${ssh_opts[@]}" "$ssh_user@$host")
 
@@ -225,6 +232,9 @@ main() {
     echo "arch:    $arch ($arch_how)"
     echo "source:  $src_how"
     echo "env:$env_args"
+    if [ -n "$env_file" ]; then
+      echo "env-file: $env_file -> $remote_dir/.env (contents not shown)"
+    fi
     if [ -n "$git_key" ]; then
       echo "keys:    $git_key -> $remote_dir/.config-sync/ssh_key (0600, $run_user)"
     fi
@@ -299,6 +309,14 @@ main() {
     rm -rf "$stagedir"
   fi
   cleanup_local=""
+
+  if [ -n "$env_file" ]; then
+    log "uploading extra env file to $host (contents not shown)"
+    scp -P "$ssh_port" "${ssh_opts[@]}" "$env_file" "$ssh_user@$host:$remote_tmp/extra.env" \
+      || die "env file upload failed"
+    "${ssh_base[@]}" "chmod 600 $remote_tmp/extra.env" || die "cannot secure uploaded env file"
+    env_args+=" $(printf '%q' "EXTRA_ENV_FILE=$remote_tmp/extra.env")"
+  fi
 
   # --- install (sudo may need a tty for the password) ---
   local -a ssh_tty=()

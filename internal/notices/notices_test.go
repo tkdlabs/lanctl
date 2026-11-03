@@ -12,7 +12,7 @@ import (
 // the developer's shell exports these.
 func cleanEnv(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{"DEPLOY_DIR", "LANCTL_LOCAL_HOST", "CONFIG_GIT_REMOTE", "LANCTL_STALE_AFTER", "SYNC_DISABLED_FILE"} {
+	for _, k := range []string{"DEPLOY_DIR", "LANCTL_LOCAL_HOST", "CONFIG_GIT_REMOTE", "LANCTL_STALE_AFTER", "SYNC_DISABLED_FILE", "NORDVPN_TOKEN"} {
 		t.Setenv(k, "")
 	}
 }
@@ -144,6 +144,25 @@ func TestMissingVPNToken(t *testing.T) {
 	}
 	if rep.Status != statusDegraded {
 		t.Errorf("status = %q, want degraded", rep.Status)
+	}
+}
+
+func TestVPNTokenFromEnv(t *testing.T) {
+	setup(t, `hosts:
+  - name: box
+    ip: 192.0.2.10
+    mac: "aa:bb:cc:dd:ee:01"
+    local: true
+  - name: nas
+    ip: 192.0.2.20
+    mac: "aa:bb:cc:dd:ee:02"
+    nordvpn_hostname: vpn.example.com
+`)
+	t.Setenv("NORDVPN_TOKEN", "env-token")
+
+	rep := Build("dev", time.Now())
+	if _, ok := noticeByCode(rep, "missing_vpn_token"); ok {
+		t.Errorf("unexpected missing_vpn_token notice with env token: %+v", rep.Notices)
 	}
 }
 
