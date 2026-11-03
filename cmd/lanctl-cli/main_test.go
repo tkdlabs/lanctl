@@ -10,6 +10,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/tkdlabs/lanctl/internal/client"
 )
 
 const hostsJSON = `[
@@ -84,6 +87,24 @@ func fakeServer(t *testing.T) *httptest.Server {
 	}
 	mux.HandleFunc("POST /api/hosts/{name}/vpn-repair", vpn)
 	mux.HandleFunc("POST /api/hosts/{name}/vms/{vm}/vpn-repair", vpn)
+
+	mux.HandleFunc("GET /api/plugs", func(w http.ResponseWriter, r *http.Request) {
+		jsonResp(w, `[{"host":"nas","provider":"hubspace","device_name":"nas-plug","power_off_seconds":30,"on":true}]`)
+	})
+	mux.HandleFunc("GET /api/hosts/{name}/plug", func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("name") == "ghost" {
+			detail(w, http.StatusNotFound, "Host 'ghost' not found")
+			return
+		}
+		jsonResp(w, `{"host":"`+r.PathValue("name")+`","provider":"hubspace","device_name":"nas-plug","power_off_seconds":30,"on":false}`)
+	})
+	mux.HandleFunc("POST /api/hosts/{name}/plug/{action}", func(w http.ResponseWriter, r *http.Request) {
+		action := r.PathValue("action")
+		jsonResp(w, `{"status":"`+action+` complete","host":"`+r.PathValue("name")+`","plug":"nas-plug","on":true}`)
+	})
+	mux.HandleFunc("GET /api/hubspace/devices", func(w http.ResponseWriter, r *http.Request) {
+		jsonResp(w, `[{"id":"dev-plug","name":"Plug One","class":"power-outlet"}]`)
+	})
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -454,6 +475,243 @@ func TestExecute_AliasLS(t *testing.T) {
 	}
 	if !strings.Contains(got.stdout, "desktop") {
 		t.Errorf("stdout = %q", got.stdout)
+	}
+}
+
+func TestExecute_PlugsTable(t *testing.T) {
+	srv := fakeServer(t)
+	got := runCLI(t, srv.URL, "", false, "plugs")
+	if got.code != 0 {
+		t.Fatalf("code = %d, stderr = %q", got.code, got.stderr)
+	}
+	for _, want := range []string{"HOST", "PLUG", "STATE", "nas", "nas-plug", "on"} {
+		if !strings.Contains(got.stdout, want) {
+			t.Errorf("stdout missing %q:\n%s", want, got.stdout)
+		}
+	}
+}
+
+func TestExecute_PlugsJSON(t *testing.T) {
+	srv := fakeServer(t)
+	got := runCLI(t, srv.URL, "", false, "-o", "json", "plugs")
+	var plugs []client.Plug
+	if err := json.Unmarshal([]byte(got.stdout), &plugs); err != nil {
+		t.Fatalf("stdout not JSON: %v (%q)", err, got.stdout)
+	}
+	if len(plugs) != 1 || plugs[0].Host != "nas" || !plugs[0].On {
+		t.Errorf("plugs = %+v", plugs)
+	}
+}
+
+func TestExecute_PlugStatus(t *testing.T) {
+	srv := fakeServer(t)
+	got := runCLI(t, srv.URL, "", false, "plug", "status", "nas")
+	if got.code != 0 {
+		t.Fatalf("code = %d, stderr = %q", got.code, got.stderr)
+	}
+	if !strings.Contains(got.stdout, "nas: nas-plug is off") {
+		t.Errorf("stdout = %q", got.stdout)
+	}
+}
+
+func TestExecute_PlugStatusJSON(t *testing.T) {
+	srv := fakeServer(t)
+	got := runCLI(t, srv.URL, "", false, "-o", "json", "plug", "status", "nas")
+	var plug client.Plug
+	if err := json.Unmarshal([]byte(got.stdout), &plug); err != nil {
+		t.Fatalf("stdout not JSON: %v (%q)", err, got.stdout)
+	}
+	if plug.Host != "nas" || plug.On {
+		t.Errorf("plug = %+v", plug)
+	}
+}
+
+func TestExecute_PlugOffRequiresConfirmation(t *testing.T) {
+	srv := fakeServer(t)
+	got := runCLI(t, srv.URL, "", false, "plug", "off", "nas")
+	if got.code != exitError {
+		t.Fatalf("code = %d, want %d", got.code, exitError)
+	}
+	if !strings.Contains(got.stderr, "refusing to proceed") {
+		t.Errorf("stderr = %q", got.stderr)
+	}
+}
+
+func TestExecute_PlugOffWithYes(t *testing.T) {
+	srv := fakeServer(t)
+	got := runCLI(t, srv.URL, "", false, "-y", "plug", "off", "nas")
+	if got.code != 0 {
+		t.Fatalf("code = %d, stderr = %q", got.code, got.stderr)
+	}
+	if !strings.Contains(got.stderr, "nas: off complete") {
+		t.Errorf("stderr = %q", got.stderr)
+	}
+}
+
+func TestExecute_PlugCycleJSON(t *testing.T) {
+	srv := fakeServer(t)
+	got := runCLI(t, srv.URL, "", false, "-o", "json", "plug", "cycle", "nas")
+	if got.code != 0 {
+		t.Fatalf("code = %d, stderr = %q", got.code, got.stderr)
+	}
+	var res actionResult
+	if err := json.Unmarshal([]byte(got.stdout), &res); err != nil {
+		t.Fatalf("stdout not JSON: %v (%q)", err, got.stdout)
+	}
+	if res.Action != "cycle" || res.Host != "nas" || res.Plug != "nas-plug" || res.On == nil || !*res.On {
+		t.Errorf("result = %+v", res)
+	}
+}
+
+func TestExecute_PlugInvalidAction(t *testing.T) {
+	srv := fakeServer(t)
+	got := runCLI(t, srv.URL, "", false, "plug", "bogus", "nas")
+	if got.code != exitUsage {
+		t.Errorf("code = %d, want %d", got.code, exitUsage)
+	}
+}
+
+func TestExecute_HubspaceDevices(t *testing.T) {
+	srv := fakeServer(t)
+	got := runCLI(t, srv.URL, "", false, "hubspace", "devices")
+	if got.code != 0 {
+		t.Fatalf("code = %d, stderr = %q", got.code, got.stderr)
+	}
+	for _, want := range []string{"NAME", "ID", "CLASS", "Plug One", "dev-plug", "power-outlet"} {
+		if !strings.Contains(got.stdout, want) {
+			t.Errorf("stdout missing %q:\n%s", want, got.stdout)
+		}
+	}
+}
+
+func TestExecute_PlugsPlain(t *testing.T) {
+	srv := fakeServer(t)
+	got := runCLI(t, srv.URL, "", false, "-o", "plain", "plugs")
+	if got.code != 0 {
+		t.Fatalf("code = %d", got.code)
+	}
+	if !strings.Contains(got.stdout, "nas\tnas-plug\ton") {
+		t.Errorf("plain output = %q", got.stdout)
+	}
+}
+
+func TestExecute_HubspaceDevicesJSON(t *testing.T) {
+	srv := fakeServer(t)
+	got := runCLI(t, srv.URL, "", false, "-o", "json", "hubspace", "devices")
+	var devices []client.HubspaceDevice
+	if err := json.Unmarshal([]byte(got.stdout), &devices); err != nil {
+		t.Fatalf("stdout not JSON: %v (%q)", err, got.stdout)
+	}
+	if len(devices) != 1 || devices[0].ID != "dev-plug" {
+		t.Errorf("devices = %+v", devices)
+	}
+}
+
+func TestExecute_PlugAndHubspaceErrors(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/plugs", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		io.WriteString(w, `{"detail":"hubspace down"}`)
+	})
+	mux.HandleFunc("GET /api/hubspace/devices", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		io.WriteString(w, `{"detail":"hubspace down"}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	for _, args := range [][]string{{"plugs"}, {"hubspace", "devices"}} {
+		got := runCLI(t, srv.URL, "", false, args...)
+		if got.code != exitError {
+			t.Errorf("%v: code = %d, want %d", args, got.code, exitError)
+		}
+		if !strings.Contains(got.stderr, "hubspace down") {
+			t.Errorf("%v: stderr = %q", args, got.stderr)
+		}
+	}
+}
+
+func TestPlugLabel(t *testing.T) {
+	if got := plugLabel("name", "id"); got != "name" {
+		t.Errorf("plugLabel(name,id) = %q", got)
+	}
+	if got := plugLabel("", "id"); got != "id" {
+		t.Errorf("plugLabel(,id) = %q", got)
+	}
+	if got := plugLabel("", ""); got != "-" {
+		t.Errorf("plugLabel(,) = %q", got)
+	}
+}
+
+func TestExecute_PlugsExtraArgs(t *testing.T) {
+	srv := fakeServer(t)
+	got := runCLI(t, srv.URL, "", false, "plugs", "extra")
+	if got.code != exitUsage {
+		t.Errorf("code = %d, want %d", got.code, exitUsage)
+	}
+}
+
+func TestExecute_HubspaceDevicesPlainAndUsage(t *testing.T) {
+	srv := fakeServer(t)
+	got := runCLI(t, srv.URL, "", false, "-o", "plain", "hubspace", "devices")
+	if got.code != 0 || !strings.Contains(got.stdout, "Plug One\tdev-plug\tpower-outlet") {
+		t.Errorf("plain output = %q (code %d)", got.stdout, got.code)
+	}
+	got = runCLI(t, srv.URL, "", false, "hubspace")
+	if got.code != exitUsage {
+		t.Errorf("missing subcommand code = %d, want %d", got.code, exitUsage)
+	}
+	got = runCLI(t, srv.URL, "", false, "hubspace", "bogus")
+	if got.code != exitUsage {
+		t.Errorf("bad subcommand code = %d, want %d", got.code, exitUsage)
+	}
+}
+
+func TestExecute_PlugUsage(t *testing.T) {
+	srv := fakeServer(t)
+	for _, args := range [][]string{{"plug"}, {"plug", "status"}, {"plug", "status", "nas", "extra"}} {
+		got := runCLI(t, srv.URL, "", false, args...)
+		if got.code != exitUsage {
+			t.Errorf("%v: code = %d, want %d", args, got.code, exitUsage)
+		}
+	}
+}
+
+func TestExecute_PlugStatusAPIError(t *testing.T) {
+	srv := fakeServer(t)
+	got := runCLI(t, srv.URL, "", false, "plug", "status", "ghost")
+	if got.code != exitError {
+		t.Fatalf("code = %d, want %d", got.code, exitError)
+	}
+	if !strings.Contains(got.stderr, "Host 'ghost' not found") {
+		t.Errorf("stderr = %q", got.stderr)
+	}
+}
+
+func TestExecute_PlugActionAPIError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/hosts/{name}/plug/{action}", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		io.WriteString(w, `{"detail":"hubspace down"}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	got := runCLI(t, srv.URL, "", false, "plug", "on", "nas")
+	if got.code != exitError {
+		t.Fatalf("code = %d, want %d", got.code, exitError)
+	}
+	if !strings.Contains(got.stderr, "hubspace down") {
+		t.Errorf("stderr = %q", got.stderr)
+	}
+}
+
+func TestCycleTimeout(t *testing.T) {
+	if got := cycleTimeout(10 * time.Second); got != 2*time.Minute {
+		t.Errorf("cycleTimeout(10s) = %v, want 2m", got)
+	}
+	if got := cycleTimeout(5 * time.Minute); got != 5*time.Minute {
+		t.Errorf("cycleTimeout(5m) = %v, want 5m", got)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -15,14 +16,39 @@ const defaultSSHKey = "~/.ssh/id_ed25519"
 // SupportedConfigVersion is the config schema version this binary reads.
 // A hosts.yaml declaring a newer config_version is rejected so that a
 // config written for a newer binary is never silently misread.
-const SupportedConfigVersion = 1
+const SupportedConfigVersion = 2
+
+// Hubspace holds the account credentials used for smart-plug control.
+type Hubspace struct {
+	Username string `yaml:"username,omitempty"`
+	Password string `yaml:"password,omitempty"`
+}
+
+// Plug describes a smart plug attached to a host. Phase 1 supports Hubspace
+// power outlets only.
+type Plug struct {
+	Provider        string `yaml:"provider,omitempty"`
+	DeviceName      string `yaml:"device_name,omitempty"`
+	DeviceID        string `yaml:"device_id,omitempty"`
+	PowerOffSeconds int    `yaml:"power_off_seconds,omitempty"`
+}
+
+const (
+	// PlugProviderHubspace is the only supported smart-plug provider.
+	PlugProviderHubspace = "hubspace"
+	// defaultPowerOffSeconds is the power-cycle off delay when unset.
+	defaultPowerOffSeconds = 30
+	// maxPowerOffSeconds bounds a possibly long, manual hard-power cut.
+	maxPowerOffSeconds = 600
+)
 
 // Config represents the top-level hosts.yaml configuration.
 type Config struct {
-	ConfigVersion int    `yaml:"config_version,omitempty"`
-	SSHKey        string `yaml:"ssh_key,omitempty"`
-	NordVPNToken  string `yaml:"nordvpn_token,omitempty"`
-	Hosts         []Host `yaml:"hosts"`
+	ConfigVersion int       `yaml:"config_version,omitempty"`
+	SSHKey        string    `yaml:"ssh_key,omitempty"`
+	NordVPNToken  string    `yaml:"nordvpn_token,omitempty"`
+	Hubspace      *Hubspace `yaml:"hubspace,omitempty"`
+	Hosts         []Host    `yaml:"hosts"`
 }
 
 // Host represents a single host entry. A Proxmox host has VMs nested under it.
@@ -38,6 +64,7 @@ type Host struct {
 	Local        bool     `yaml:"local,omitempty"`
 	Services     []string `yaml:"services,omitempty"`
 	UserServices []string `yaml:"user_services,omitempty"`
+	Plug         *Plug    `yaml:"plug,omitempty"`
 	VMs          []VM     `yaml:"vms,omitempty"`
 }
 
@@ -110,6 +137,10 @@ func LoadFile(path string) (Config, error) {
 		return cfg, fmt.Errorf("no hosts found in %s. Copy hosts.example.yaml and edit it", path)
 	}
 
+	if err := validatePlugs(&cfg); err != nil {
+		return cfg, err
+	}
+
 	return cfg, nil
 }
 
@@ -165,6 +196,90 @@ func applySecretEnvOverrides(cfg *Config) {
 	if v := os.Getenv("NORDVPN_TOKEN"); v != "" {
 		cfg.NordVPNToken = v
 	}
+	user := os.Getenv("HUBSPACE_USERNAME")
+	pass := os.Getenv("HUBSPACE_PASSWORD")
+	if user != "" || pass != "" {
+		if cfg.Hubspace == nil {
+			cfg.Hubspace = &Hubspace{}
+		}
+		if user != "" {
+			cfg.Hubspace.Username = user
+		}
+		if pass != "" {
+			cfg.Hubspace.Password = pass
+		}
+	}
+}
+
+// validatePlugs normalizes provider and delay defaults and rejects references
+// that could never resolve at runtime.
+func validatePlugs(cfg *Config) error {
+	for i := range cfg.Hosts {
+		h := &cfg.Hosts[i]
+		if h.Plug == nil {
+			continue
+		}
+		p := h.Plug
+		if p.Provider == "" {
+			p.Provider = PlugProviderHubspace
+		} else if !strings.EqualFold(p.Provider, PlugProviderHubspace) {
+			return fmt.Errorf("host %q: unsupported plug provider %q (only %q is supported)",
+				h.Name, p.Provider, PlugProviderHubspace)
+		} else {
+			p.Provider = PlugProviderHubspace
+		}
+		if strings.TrimSpace(p.DeviceID) == "" && strings.TrimSpace(p.DeviceName) == "" {
+			return fmt.Errorf("host %q: plug needs device_id or device_name", h.Name)
+		}
+		if p.PowerOffSeconds < 0 || p.PowerOffSeconds > maxPowerOffSeconds {
+			return fmt.Errorf("host %q: plug power_off_seconds must be between 0 and %d",
+				h.Name, maxPowerOffSeconds)
+		}
+		if p.PowerOffSeconds == 0 {
+			p.PowerOffSeconds = defaultPowerOffSeconds
+		}
+	}
+	return nil
+}
+
+// HubspaceCredentials returns the configured account credentials. Credentials
+// are optional at load time so a shared config can be used on boxes that do
+// not need plugs; callers report a clear error when they are empty.
+func (c Config) HubspaceCredentials() (username, password string) {
+	if c.Hubspace == nil {
+		return "", ""
+	}
+	return c.Hubspace.Username, c.Hubspace.Password
+}
+
+// HasPlugs reports whether any host has a smart plug configured.
+func (c Config) HasPlugs() bool {
+	for _, h := range c.Hosts {
+		if h.Plug != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// PlugHosts lists hosts with a configured plug, for diagnostics.
+func (c Config) PlugHosts() []string {
+	var names []string
+	for _, h := range c.Hosts {
+		if h.Plug != nil {
+			names = append(names, h.Name)
+		}
+	}
+	return names
+}
+
+// OffDuration returns the configured power-cycle off delay.
+func (p Plug) OffDuration() time.Duration {
+	seconds := p.PowerOffSeconds
+	if seconds <= 0 {
+		seconds = defaultPowerOffSeconds
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 // hostNames returns the configured host names for diagnostics.

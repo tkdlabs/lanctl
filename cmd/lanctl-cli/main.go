@@ -125,6 +125,12 @@ func execute(ctx context.Context, e env, args []string) int {
 		return cmdLogs(ctx, o, c, cargs)
 	case "vpn-repair":
 		return cmdVPNRepair(ctx, o, c, cargs)
+	case "plugs":
+		return cmdPlugs(ctx, o, c, cargs)
+	case "plug":
+		return cmdPlug(ctx, o, c, cargs)
+	case "hubspace":
+		return cmdHubspace(ctx, o, c, cargs)
 	case "version":
 		return cmdVersion(ctx, o, c, cargs)
 	case "help":
@@ -171,6 +177,10 @@ Commands:
   service HOST[/VM] SERVICE ACTION     start|stop|restart a service
   logs HOST[/VM] SERVICE [-n N] [-f]   show or follow journal lines
   vpn-repair HOST[/VM]                 run NordVPN repair
+  plugs                                list configured smart plugs
+  plug status HOST                     show a plug's state
+  plug on|off|cycle HOST               control a smart plug
+  hubspace devices                     list Hubspace power outlets
   version                              print the server version
   help                                 show this help
 
@@ -180,7 +190,7 @@ Global flags:
   -o, --output FMT   table, json, or plain (default table)
   -q, --quiet        suppress status messages
       --no-color     disable ANSI color
-  -y, --yes          skip shutdown confirmation
+  -y, --yes          skip shutdown and plug confirmation prompts
 `)
 }
 

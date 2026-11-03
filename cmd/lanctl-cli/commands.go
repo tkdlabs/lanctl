@@ -7,11 +7,13 @@ import (
 	"flag"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/tkdlabs/lanctl/internal/client"
 )
 
 var validActions = map[string]bool{"start": true, "stop": true, "restart": true}
+var validPlugActions = map[string]bool{"status": true, "on": true, "off": true, "cycle": true}
 
 // actionResult is the JSON shape printed by mutating commands with -o json.
 type actionResult struct {
@@ -19,6 +21,8 @@ type actionResult struct {
 	Host    string `json:"host"`
 	VM      string `json:"vm,omitempty"`
 	Service string `json:"service,omitempty"`
+	Plug    string `json:"plug,omitempty"`
+	On      *bool  `json:"on,omitempty"`
 	Status  string `json:"status,omitempty"`
 }
 
@@ -200,6 +204,117 @@ func cmdVPNRepair(ctx context.Context, o *options, c *client.Client, args []stri
 	}
 	host, vm := parseTarget(rest[0])
 	return fail(o, c.VPNRepair(ctx, host, vm, o.stdout))
+}
+
+func cmdPlugs(ctx context.Context, o *options, c *client.Client, args []string) int {
+	fs := newFlagSet("plugs", o)
+	rest, err := parseFlags(fs, args)
+	if err != nil {
+		return usageError(o, err)
+	}
+	if len(rest) != 0 {
+		fmt.Fprintln(o.stderr, "lanctl-cli: plugs takes no arguments")
+		return exitUsage
+	}
+	plugs, err := c.Plugs(ctx)
+	if err != nil {
+		return fail(o, err)
+	}
+	if err := renderPlugs(o.stdout, plugs, o.output, o.color()); err != nil {
+		return fail(o, err)
+	}
+	return exitOK
+}
+
+func cmdPlug(ctx context.Context, o *options, c *client.Client, args []string) int {
+	fs := newFlagSet("plug", o)
+	rest, err := parseFlags(fs, args)
+	if err != nil {
+		return usageError(o, err)
+	}
+	if len(rest) != 2 {
+		fmt.Fprintln(o.stderr, "lanctl-cli: usage: plug status|on|off|cycle HOST")
+		return exitUsage
+	}
+	action, host := rest[0], rest[1]
+	if !validPlugActions[action] {
+		fmt.Fprintf(o.stderr, "lanctl-cli: invalid plug action %q (want status, on, off, or cycle)\n", action)
+		return exitUsage
+	}
+
+	if action == "status" {
+		plug, err := c.PlugStatus(ctx, host)
+		if err != nil {
+			return fail(o, err)
+		}
+		if o.json() {
+			if err := writeJSON(o.stdout, plug); err != nil {
+				return fail(o, err)
+			}
+			return exitOK
+		}
+		fmt.Fprintf(o.stdout, "%s: %s is %s\n", plug.Host, plugLabel(plug.DeviceName, plug.DeviceID), stateLabel(plug.On))
+		return exitOK
+	}
+
+	if action == "off" || action == "cycle" {
+		prompt := "Turn off the plug for " + host + "? This cuts power immediately."
+		if action == "cycle" {
+			prompt = "Power-cycle " + host + "? This cuts power immediately and turns it back on."
+		}
+		ok, err := confirm(o, prompt)
+		if err != nil {
+			return fail(o, err)
+		}
+		if !ok {
+			if !o.quiet {
+				fmt.Fprintln(o.stderr, "aborted")
+			}
+			return exitOK
+		}
+	}
+
+	if action == "cycle" {
+		// The server waits out the off delay, so the normal 15s client
+		// timeout is too short. A user-supplied longer timeout still wins.
+		c = client.New(o.server, client.WithTimeout(cycleTimeout(o.timeout)))
+	}
+	res, err := c.PlugControl(ctx, host, action)
+	if err != nil {
+		return fail(o, err)
+	}
+	on := res.On
+	return report(o, actionResult{Action: action, Host: host, Plug: res.Plug, On: &on, Status: res.Status},
+		fmt.Sprintf("%s: %s", host, res.Status))
+}
+
+func cmdHubspace(ctx context.Context, o *options, c *client.Client, args []string) int {
+	fs := newFlagSet("hubspace", o)
+	rest, err := parseFlags(fs, args)
+	if err != nil {
+		return usageError(o, err)
+	}
+	if len(rest) != 1 || rest[0] != "devices" {
+		fmt.Fprintln(o.stderr, "lanctl-cli: usage: hubspace devices")
+		return exitUsage
+	}
+	devices, err := c.HubspaceDevices(ctx)
+	if err != nil {
+		return fail(o, err)
+	}
+	if err := renderHubspaceDevices(o.stdout, devices, o.output); err != nil {
+		return fail(o, err)
+	}
+	return exitOK
+}
+
+// cycleTimeout gives a power cycle enough time for the configured off delay.
+func cycleTimeout(timeout time.Duration) time.Duration {
+	const min = 2 * time.Minute
+	if timeout < min {
+		return min
+	}
+	return timeout
 }
 
 func cmdVersion(ctx context.Context, o *options, c *client.Client, args []string) int {

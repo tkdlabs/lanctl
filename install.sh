@@ -29,6 +29,8 @@
 #   SYNC_DELAY           Seconds to wait before applying a synced config (default: 300)
 #   SYNC_SERVICE_NAME    Sync timer unit name             (default: lanctl-sync)
 #   NORDVPN_TOKEN        NordVPN access token (optional; overrides hosts.yaml)
+#   HUBSPACE_USERNAME    Hubspace account username (overrides hosts.yaml)
+#   HUBSPACE_PASSWORD    Hubspace account password (overrides hosts.yaml)
 #   EXTRA_ENV_FILE       Extra EnvironmentFile fragment to append to .env
 #
 # The optional client binary (lanctl-cli) is installed to /usr/local/bin when
@@ -142,7 +144,7 @@ DEPLOY_DIR="${dir_flag:-${DEPLOY_DIR:-/opt/lanctl}}"
 if [ -f "$DEPLOY_DIR/.env" ]; then
   while IFS='=' read -r key value; do
     case "$key" in
-      PORT|LANCTL_ALLOW_SHUTDOWN|LANCTL_LOCAL_HOST|CONFIG_GIT_REMOTE|CONFIG_GIT_BRANCH|CONFIG_GIT_SSH_KEY|CONFIG_GIT_KNOWN_HOSTS|SYNC_DELAY|NORDVPN_TOKEN)
+      PORT|LANCTL_ALLOW_SHUTDOWN|LANCTL_LOCAL_HOST|CONFIG_GIT_REMOTE|CONFIG_GIT_BRANCH|CONFIG_GIT_SSH_KEY|CONFIG_GIT_KNOWN_HOSTS|SYNC_DELAY|NORDVPN_TOKEN|HUBSPACE_USERNAME|HUBSPACE_PASSWORD)
         if [ -z "${!key+x}" ]; then
           printf -v "$key" '%s' "$(env_unquote "$value")"
         fi
@@ -160,6 +162,8 @@ SYNC_DELAY="${SYNC_DELAY:-300}"
 PORT="${PORT:-8003}"
 LANCTL_ALLOW_SHUTDOWN="${LANCTL_ALLOW_SHUTDOWN:-1}"
 NORDVPN_TOKEN="${NORDVPN_TOKEN:-}"
+HUBSPACE_USERNAME="${HUBSPACE_USERNAME:-}"
+HUBSPACE_PASSWORD="${HUBSPACE_PASSWORD:-}"
 EXTRA_ENV_FILE="${EXTRA_ENV_FILE:-}"
 
 # Build the binary if it was not supplied.
@@ -243,6 +247,9 @@ echo "==> Writing $DEPLOY_DIR/.env"
   env_line SYNC_DELAY "$SYNC_DELAY"
   echo "# Optional NordVPN token; overrides nordvpn_token in hosts.yaml."
   env_line NORDVPN_TOKEN "$NORDVPN_TOKEN"
+  echo "# Optional Hubspace account; overrides the hubspace block in hosts.yaml."
+  env_line HUBSPACE_USERNAME "$HUBSPACE_USERNAME"
+  env_line HUBSPACE_PASSWORD "$HUBSPACE_PASSWORD"
   if [ -n "$EXTRA_ENV_FILE" ]; then
     [ -f "$EXTRA_ENV_FILE" ] || die "EXTRA_ENV_FILE not found: $EXTRA_ENV_FILE"
     echo "# Extra settings appended from EXTRA_ENV_FILE."

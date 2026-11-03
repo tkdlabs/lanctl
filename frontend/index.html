@@ -108,6 +108,20 @@
     .vpn-badge.vpn-ok    { color: #4ade80; }
     .vpn-badge.vpn-down  { color: #f87171; }
 
+    .plug-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      margin-top: 0.25rem;
+      font-size: 0.7rem;
+      font-weight: 500;
+      letter-spacing: 0.03em;
+    }
+    .plug-badge .dot { width: 7px; height: 7px; margin-right: 0; }
+    .plug-badge.plug-on      { color: #4ade80; }
+    .plug-badge.plug-off     { color: #94a3b8; }
+    .plug-badge.plug-unknown { color: #64748b; }
+
     .proxmox-badge {
       display: inline-block;
       padding: 0.1rem 0.4rem;
@@ -210,6 +224,7 @@
     .btn-wake     { background: #1d4ed8; color: #fff; }
     .btn-shutdown { background: #7f1d1d; color: #fca5a5; }
     .btn-vpnfix   { background: #78350f; color: #fcd34d; }
+    .btn-plug     { background: #1e3a5f; color: #bfdbfe; }
 
     .repair-row td {
       padding: 0;
@@ -268,7 +283,11 @@
 
   <script>
     const POLL_MS = 10_000;
+    const PLUG_POLL_MS = 60_000;
     let pollTimer = null;
+    let plugTimer = null;
+    let plugStates = {};
+    let lastHosts = [];
 
     function esc(str) {
       return String(str)
@@ -297,6 +316,25 @@
 
     async function fetchNotices() {
       return fetchJSON('/api/notices');
+    }
+
+    // Hubspace is a cloud call, so fetch plug state on a slower cadence than
+    // the host table. A failure leaves the host table usable.
+    async function fetchPlugs() {
+      try {
+        const plugs = await fetchJSON('/api/plugs');
+        const next = {};
+        for (const p of plugs) next[p.host] = p;
+        plugStates = next;
+        if (lastHosts.length) renderHosts(lastHosts);
+      } catch (err) {
+        console.warn('plug state unavailable:', err.message);
+      }
+    }
+
+    async function pollPlugs() {
+      await fetchPlugs();
+      plugTimer = setTimeout(pollPlugs, PLUG_POLL_MS);
     }
 
     async function loadVersion() {
@@ -394,6 +432,26 @@
 
         const typeBadge = isProxmox ? '<span class="proxmox-badge">proxmox</span>' : '';
 
+        const livePlug = h.plug ? plugStates[h.name] : null;
+        const plugName = h.plug
+          ? ((livePlug && (livePlug.device_name || livePlug.device_id)) ||
+             h.plug.device_name || h.plug.device_id || 'plug')
+          : '';
+        const plugOn = livePlug ? livePlug.on : null;
+        const plugStateLabel = plugOn === null ? 'unknown' : (plugOn ? 'on' : 'off');
+        const plugClass = plugOn === null ? 'plug-unknown' : (plugOn ? 'plug-on' : 'plug-off');
+        const plugDot = plugOn === null ? 'offline' : (plugOn ? 'online' : 'offline');
+        const plugHtml = h.plug
+          ? `<div class="plug-badge ${plugClass}"><span class="dot ${plugDot}"></span>Plug ${esc(plugName)} · ${plugStateLabel}</div>`
+          : '';
+        const plugBtns = h.plug
+          ? `<button class="btn-plug" data-name="${esc(h.name)}" data-plug-action="on"
+               ${plugOn === true ? 'disabled title="Already on"' : ''}>On</button>
+             <button class="btn-plug" data-name="${esc(h.name)}" data-plug-action="off"
+               ${plugOn === false ? 'disabled title="Already off"' : ''}>Off</button>
+             <button class="btn-plug" data-name="${esc(h.name)}" data-plug-action="cycle">Cycle</button>`
+          : '';
+
         const wakeBtn = h.local ? '' :
           `<button class="btn-wake" data-name="${esc(h.name)}" data-action="wake"
             ${h.online ? 'disabled title="Already online"' : ''}>Wake</button>`;
@@ -415,6 +473,7 @@
             <div class="label">${esc(h.name)}${typeBadge}</div>
             <div class="meta">${esc(h.ip)} &nbsp;·&nbsp; ${esc(h.mac)}</div>
             ${vpnHtml}
+            ${plugHtml}
           </td>
           <td>
             <span class="dot ${h.online ? 'online' : 'offline'}"></span>
@@ -424,6 +483,7 @@
           <td class="actions">
             ${wakeBtn}
             ${fixVpnBtn}
+            ${plugBtns}
             <button class="btn-shutdown" data-name="${esc(h.name)}" data-action="shutdown"
               data-local="${h.local || false}"
               ${!h.online ? 'disabled title="Already offline"' : ''}>Shutdown</button>
@@ -488,6 +548,35 @@
     }
 
     document.getElementById('host-table').addEventListener('click', async (e) => {
+      // Smart plug controls (on/off/cycle)
+      const plugBtn = e.target.closest('button[data-plug-action]');
+      if (plugBtn) {
+        const { name, plugAction } = plugBtn.dataset;
+        if (plugAction === 'off' || plugAction === 'cycle') {
+          const msg = plugAction === 'cycle'
+            ? `Power-cycle ${name}? This cuts power immediately and turns it back on.`
+            : `Turn off the plug for ${name}? This cuts power immediately.`;
+          if (!confirm(msg)) return;
+        }
+        const oldText = plugBtn.textContent;
+        plugBtn.disabled = true;
+        if (plugAction === 'cycle') plugBtn.textContent = 'Cycling…';
+        try {
+          const res = await fetch(`/api/hosts/${encodeURIComponent(name)}/plug/${plugAction}`, { method: 'POST' });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+          showToast(`${name}: ${data.status}`, 'ok');
+          await fetchPlugs();
+          clearTimeout(pollTimer);
+          pollTimer = setTimeout(poll, plugAction === 'cycle' ? 5000 : 2000);
+        } catch (err) {
+          showToast(`${name}: ${err.message}`, 'err');
+          plugBtn.disabled = false;
+          plugBtn.textContent = oldText;
+        }
+        return;
+      }
+
       // Service control buttons (start/stop/restart)
       const svcBtn = e.target.closest('button[data-svc-action]');
       if (svcBtn) {
@@ -622,7 +711,8 @@
 
       const bar = document.getElementById('status-bar');
       if (hosts.status === 'fulfilled') {
-        renderHosts(hosts.value);
+        lastHosts = hosts.value;
+        renderHosts(lastHosts);
         bar.textContent =
           `Last updated: ${new Date().toLocaleTimeString()} · refreshes every ${POLL_MS / 1000}s`;
       } else {
@@ -633,6 +723,7 @@
 
     loadVersion();
     poll();
+    pollPlugs();
   </script>
 </body>
 </html>

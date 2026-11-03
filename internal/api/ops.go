@@ -1,13 +1,24 @@
 package api
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/tkdlabs/lanctl/internal/hubspace"
 	"github.com/tkdlabs/lanctl/internal/localops"
 	"github.com/tkdlabs/lanctl/internal/network"
 	"github.com/tkdlabs/lanctl/internal/sshops"
 )
+
+// plugRef identifies a configured smart plug. Host is the lanctl host name and
+// is used as the result key in HubspacePlugStates.
+type plugRef struct {
+	Host       string
+	DeviceID   string
+	DeviceName string
+}
 
 // operations is the seam through which handlers reach the outside world
 // (network, SSH, local systemctl/journalctl). Tests swap the package-level
@@ -28,6 +39,11 @@ type operations interface {
 	SSHJournalLines(ip, user, keyPath, service string, n int, userScope bool) (string, error)
 	SSHStreamJournal(ip, user, keyPath, service string, userScope bool, w http.ResponseWriter, r *http.Request)
 	StreamVPNRepair(ip, user, keyPath, token string, w http.ResponseWriter, r *http.Request)
+
+	HubspaceDevices(ctx context.Context, username, password string) ([]hubspace.Device, error)
+	HubspacePlugStates(ctx context.Context, username, password string, refs []plugRef) (map[string]bool, error)
+	HubspaceSetPlug(ctx context.Context, username, password string, ref plugRef, on bool) error
+	HubspaceCyclePlug(ctx context.Context, username, password string, ref plugRef, off time.Duration) error
 }
 
 // ops is the active operations implementation. Swapped in tests.
@@ -85,4 +101,56 @@ func (realOperations) SSHStreamJournal(ip, user, keyPath, service string, userSc
 
 func (realOperations) StreamVPNRepair(ip, user, keyPath, token string, w http.ResponseWriter, r *http.Request) {
 	sshops.StreamVPNRepair(ip, user, keyPath, token, w, r)
+}
+
+func (realOperations) HubspaceDevices(ctx context.Context, username, password string) ([]hubspace.Device, error) {
+	return hubspace.New(username, password).Devices(ctx)
+}
+
+func (realOperations) HubspacePlugStates(ctx context.Context, username, password string, refs []plugRef) (map[string]bool, error) {
+	states := make(map[string]bool, len(refs))
+	if len(refs) == 0 {
+		return states, nil
+	}
+	client := hubspace.New(username, password)
+	outlets, err := client.PowerOutlets(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, ref := range refs {
+		device, err := hubspace.ResolveDevice(outlets, ref.DeviceID, ref.DeviceName)
+		if err != nil {
+			return nil, fmt.Errorf("host %s: %w", ref.Host, err)
+		}
+		on, err := client.State(ctx, device)
+		if err != nil {
+			return nil, fmt.Errorf("host %s: %w", ref.Host, err)
+		}
+		states[ref.Host] = on
+	}
+	return states, nil
+}
+
+func (realOperations) HubspaceSetPlug(ctx context.Context, username, password string, ref plugRef, on bool) error {
+	client := hubspace.New(username, password)
+	device, err := client.FindPowerOutlet(ctx, ref.DeviceID, ref.DeviceName)
+	if err != nil {
+		return fmt.Errorf("host %s: %w", ref.Host, err)
+	}
+	if err := client.SetPower(ctx, device, on); err != nil {
+		return fmt.Errorf("host %s: %w", ref.Host, err)
+	}
+	return nil
+}
+
+func (realOperations) HubspaceCyclePlug(ctx context.Context, username, password string, ref plugRef, off time.Duration) error {
+	client := hubspace.New(username, password)
+	device, err := client.FindPowerOutlet(ctx, ref.DeviceID, ref.DeviceName)
+	if err != nil {
+		return fmt.Errorf("host %s: %w", ref.Host, err)
+	}
+	if err := client.Cycle(ctx, device, off); err != nil {
+		return fmt.Errorf("host %s: %w", ref.Host, err)
+	}
+	return nil
 }

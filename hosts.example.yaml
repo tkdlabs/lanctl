@@ -3,7 +3,7 @@
 #
 # Schema version read by this binary. A binary rejects a file declaring a
 # newer version — upgrade lanctl before using a newer config.
-config_version: 1
+config_version: 2
 #
 # Syncing one file across boxes: omit `local:` everywhere and set
 # LANCTL_LOCAL_HOST=<name> (or <host>/<vm>) in each box's .env instead.
@@ -21,6 +21,12 @@ config_version: 1
 # Generate at: https://my.nordaccount.com/dashboard/nordvpn/access-tokens/
 # Can also be supplied as NORDVPN_TOKEN in the environment (the env wins).
 # nordvpn_token: "your-access-token-here"
+
+# Optional: Hubspace (Home Depot/Afero) account for smart plugs.
+# HUBSPACE_USERNAME and HUBSPACE_PASSWORD override these values.
+# hubspace:
+#   username: user@example.com
+#   password: "your-password"
 
 hosts:
   # Use local: true for the machine running lanctl itself.
@@ -48,6 +54,10 @@ hosts:
     # user_services:                 # optional — systemd user services of the
     #   - myapp-backend              # SSH user (systemctl --user); requires
     #                                # loginctl enable-linger tom
+    # plug:                          # optional — Hubspace smart plug
+    #   provider: hubspace           # optional; defaults to hubspace
+    #   device_name: desktop-plug    # or a stable device_id
+    #   power_off_seconds: 30        # power-cycle off delay (default 30)
 
   # Proxmox hypervisor — ip/mac/ssh_user refer to the physical machine.
   # VMs running on it are listed under vms:.

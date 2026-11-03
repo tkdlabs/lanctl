@@ -98,6 +98,39 @@ type VM struct {
 	VPNReachable    *bool             `json:"vpn_reachable"`
 }
 
+// PlugInfo is the non-secret plug configuration attached to a host.
+type PlugInfo struct {
+	Provider        string `json:"provider"`
+	DeviceName      string `json:"device_name,omitempty"`
+	DeviceID        string `json:"device_id,omitempty"`
+	PowerOffSeconds int    `json:"power_off_seconds"`
+}
+
+// Plug is a configured smart plug and its current state.
+type Plug struct {
+	Host            string `json:"host"`
+	Provider        string `json:"provider"`
+	DeviceName      string `json:"device_name,omitempty"`
+	DeviceID        string `json:"device_id,omitempty"`
+	PowerOffSeconds int    `json:"power_off_seconds"`
+	On              bool   `json:"on"`
+}
+
+// PlugActionResult is returned by an on/off/cycle request.
+type PlugActionResult struct {
+	Status string `json:"status"`
+	Host   string `json:"host"`
+	Plug   string `json:"plug"`
+	On     bool   `json:"on"`
+}
+
+// HubspaceDevice is a controllable device discovered in the Hubspace account.
+type HubspaceDevice struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Class string `json:"class"`
+}
+
 // Host is a managed host. VMs is only populated for Proxmox hosts.
 type Host struct {
 	Name            string            `json:"name"`
@@ -111,6 +144,7 @@ type Host struct {
 	ServiceStatuses map[string]string `json:"service_statuses"`
 	VPNHostname     *string           `json:"vpn_hostname"`
 	VPNReachable    *bool             `json:"vpn_reachable"`
+	Plug            *PlugInfo         `json:"plug,omitempty"`
 	VMs             *[]VM             `json:"vms,omitempty"`
 }
 
@@ -179,6 +213,45 @@ func (c *Client) Logs(ctx context.Context, host, vm, service string, lines int) 
 		out.Lines = []string{}
 	}
 	return out.Lines, nil
+}
+
+// Plugs returns all configured smart plugs with their current state.
+func (c *Client) Plugs(ctx context.Context) ([]Plug, error) {
+	var out []Plug
+	if err := c.do(ctx, http.MethodGet, "/api/plugs", nil, &out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = []Plug{}
+	}
+	return out, nil
+}
+
+// PlugStatus returns one host's plug status.
+func (c *Client) PlugStatus(ctx context.Context, host string) (Plug, error) {
+	var out Plug
+	err := c.do(ctx, http.MethodGet, hostBase(host, "")+"/plug", nil, &out)
+	return out, err
+}
+
+// PlugControl runs on, off, or cycle for a host's plug.
+func (c *Client) PlugControl(ctx context.Context, host, action string) (PlugActionResult, error) {
+	var out PlugActionResult
+	path := hostBase(host, "") + "/plug/" + esc(action)
+	err := c.do(ctx, http.MethodPost, path, nil, &out)
+	return out, err
+}
+
+// HubspaceDevices lists controllable Hubspace power outlets.
+func (c *Client) HubspaceDevices(ctx context.Context) ([]HubspaceDevice, error) {
+	var out []HubspaceDevice
+	if err := c.do(ctx, http.MethodGet, "/api/hubspace/devices", nil, &out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = []HubspaceDevice{}
+	}
+	return out, nil
 }
 
 // ── Internals ────────────────────────────────────────────────────────────────

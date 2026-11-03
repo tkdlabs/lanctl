@@ -122,6 +122,16 @@ func checkConfig(cfg config.Config, report *Report) {
 		}
 	}
 
+	if cfg.HasPlugs() {
+		user, pass := cfg.HubspaceCredentials()
+		if user == "" || pass == "" {
+			uses := cfg.PlugHosts()
+			sort.Strings(uses)
+			report.add(LevelWarning, "missing_hubspace_credentials",
+				fmt.Sprintf("Hubspace credentials are unset but smart plugs are configured for: %s", strings.Join(uses, ", ")))
+		}
+	}
+
 	missing := map[string][]string{}
 	addMissing := func(key, target string) {
 		if key == "" || fileExists(key) {

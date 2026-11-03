@@ -12,7 +12,7 @@ import (
 // the developer's shell exports these.
 func cleanEnv(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{"DEPLOY_DIR", "LANCTL_LOCAL_HOST", "CONFIG_GIT_REMOTE", "LANCTL_STALE_AFTER", "SYNC_DISABLED_FILE", "NORDVPN_TOKEN"} {
+	for _, k := range []string{"DEPLOY_DIR", "LANCTL_LOCAL_HOST", "CONFIG_GIT_REMOTE", "LANCTL_STALE_AFTER", "SYNC_DISABLED_FILE", "NORDVPN_TOKEN", "HUBSPACE_USERNAME", "HUBSPACE_PASSWORD"} {
 		t.Setenv(k, "")
 	}
 }
@@ -163,6 +163,46 @@ func TestVPNTokenFromEnv(t *testing.T) {
 	rep := Build("dev", time.Now())
 	if _, ok := noticeByCode(rep, "missing_vpn_token"); ok {
 		t.Errorf("unexpected missing_vpn_token notice with env token: %+v", rep.Notices)
+	}
+}
+
+func TestMissingHubspaceCredentials(t *testing.T) {
+	setup(t, `hosts:
+  - name: box
+    ip: 192.0.2.10
+    mac: "aa:bb:cc:dd:ee:01"
+    local: true
+    plug:
+      device_name: box-plug
+`)
+	rep := Build("dev", time.Now())
+	n, ok := noticeByCode(rep, "missing_hubspace_credentials")
+	if !ok {
+		t.Fatalf("missing missing_hubspace_credentials notice: %+v", rep.Notices)
+	}
+	if n.Level != LevelWarning {
+		t.Errorf("level = %q, want warning", n.Level)
+	}
+	if !strings.Contains(n.Message, "box") {
+		t.Errorf("message %q should name the host", n.Message)
+	}
+}
+
+func TestHubspaceCredentialsFromEnv(t *testing.T) {
+	setup(t, `hosts:
+  - name: box
+    ip: 192.0.2.10
+    mac: "aa:bb:cc:dd:ee:01"
+    local: true
+    plug:
+      device_name: box-plug
+`)
+	t.Setenv("HUBSPACE_USERNAME", "user@example.com")
+	t.Setenv("HUBSPACE_PASSWORD", "secret")
+
+	rep := Build("dev", time.Now())
+	if _, ok := noticeByCode(rep, "missing_hubspace_credentials"); ok {
+		t.Errorf("unexpected missing_hubspace_credentials notice with env credentials: %+v", rep.Notices)
 	}
 }
 

@@ -192,6 +192,87 @@ func formatServices(services, userServices []string, statuses map[string]string)
 	return strings.Join(parts, ",")
 }
 
+func renderPlugs(w io.Writer, plugs []client.Plug, format string, color bool) error {
+	switch format {
+	case "json":
+		return writeJSON(w, plugs)
+	case "plain":
+		for _, p := range plugs {
+			fmt.Fprintf(w, "%s\t%s\t%s\n", p.Host, plugLabel(p.DeviceName, p.DeviceID), stateLabel(p.On))
+		}
+		return nil
+	default:
+		headers := []string{"HOST", "PLUG", "STATE"}
+		widths := []int{len(headers[0]), len(headers[1])}
+		for _, p := range plugs {
+			if len(p.Host) > widths[0] {
+				widths[0] = len(p.Host)
+			}
+			if label := plugLabel(p.DeviceName, p.DeviceID); len(label) > widths[1] {
+				widths[1] = len(label)
+			}
+		}
+		fmt.Fprintf(w, "%s  %s  %s\n", pad(headers[0], widths[0]), pad(headers[1], widths[1]), headers[2])
+		for _, p := range plugs {
+			label := plugLabel(p.DeviceName, p.DeviceID)
+			state := stateLabel(p.On)
+			if color {
+				state = colorize(p.On, state)
+			}
+			fmt.Fprintf(w, "%s  %s  %s\n", pad(p.Host, widths[0]), pad(label, widths[1]), state)
+		}
+		return nil
+	}
+}
+
+func renderHubspaceDevices(w io.Writer, devices []client.HubspaceDevice, format string) error {
+	switch format {
+	case "json":
+		return writeJSON(w, devices)
+	case "plain":
+		for _, d := range devices {
+			fmt.Fprintf(w, "%s\t%s\t%s\n", d.Name, d.ID, d.Class)
+		}
+		return nil
+	default:
+		headers := []string{"NAME", "ID", "CLASS"}
+		widths := []int{len(headers[0]), len(headers[1]), len(headers[2])}
+		for _, d := range devices {
+			if len(d.Name) > widths[0] {
+				widths[0] = len(d.Name)
+			}
+			if len(d.ID) > widths[1] {
+				widths[1] = len(d.ID)
+			}
+			if len(d.Class) > widths[2] {
+				widths[2] = len(d.Class)
+			}
+		}
+		fmt.Fprintf(w, "%s  %s  %s\n", pad(headers[0], widths[0]), pad(headers[1], widths[1]), headers[2])
+		for _, d := range devices {
+			fmt.Fprintf(w, "%s  %s  %s\n", pad(d.Name, widths[0]), pad(d.ID, widths[1]), d.Class)
+		}
+		return nil
+	}
+}
+
+func plugLabel(name, id string) string {
+	if name != "" {
+		return name
+	}
+	if id != "" {
+		return id
+	}
+	return "-"
+}
+
+func stateLabel(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
+}
+
 func formatVPN(hostname *string, reachable *bool) string {
 	if hostname == nil || *hostname == "" {
 		return "-"

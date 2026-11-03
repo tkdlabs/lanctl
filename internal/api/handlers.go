@@ -34,6 +34,10 @@ func RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/hosts/{name}/vms/{vm}/services/{service}/logs/stream", VMStreamLogs)
 	mux.HandleFunc("GET /api/hosts/{name}/vms/{vm}/services/{service}/logs", VMGetLogs)
 	mux.HandleFunc("POST /api/hosts/{name}/vms/{vm}/services/{service}/{action}", VMServiceControl)
+	mux.HandleFunc("GET /api/plugs", GetPlugs)
+	mux.HandleFunc("GET /api/hubspace/devices", HubspaceDevices)
+	mux.HandleFunc("GET /api/hosts/{name}/plug", PlugStatus)
+	mux.HandleFunc("POST /api/hosts/{name}/plug/{action}", PlugControl)
 }
 
 // ── GET /api/version ──────────────────────────────────────────────────────────
@@ -69,7 +73,35 @@ type hostStatus struct {
 	ServiceStatuses map[string]string `json:"service_statuses"`
 	VPNHostname     *string           `json:"vpn_hostname"`
 	VPNReachable    *bool             `json:"vpn_reachable"`
+	Plug            *plugInfo         `json:"plug,omitempty"`
 	VMs             *[]vmStatus       `json:"vms,omitempty"`
+}
+
+// plugInfo is the non-secret plug configuration shown on a host row. Live
+// state is fetched separately so /api/hosts never contacts Hubspace.
+type plugInfo struct {
+	Provider        string `json:"provider"`
+	DeviceName      string `json:"device_name,omitempty"`
+	DeviceID        string `json:"device_id,omitempty"`
+	PowerOffSeconds int    `json:"power_off_seconds"`
+}
+
+// plugStatus is the response shape for GET /api/plugs and per-host status.
+type plugStatus struct {
+	Host            string `json:"host"`
+	Provider        string `json:"provider"`
+	DeviceName      string `json:"device_name,omitempty"`
+	DeviceID        string `json:"device_id,omitempty"`
+	PowerOffSeconds int    `json:"power_off_seconds"`
+	On              bool   `json:"on"`
+}
+
+// plugActionResult is the response shape for on/off/cycle.
+type plugActionResult struct {
+	Status string `json:"status"`
+	Host   string `json:"host"`
+	Plug   string `json:"plug"`
+	On     bool   `json:"on"`
 }
 
 // ── Concurrent host/VM checkers ───────────────────────────────────────────────
@@ -254,6 +286,7 @@ func GetHosts(w http.ResponseWriter, r *http.Request) {
 			ServiceStatuses: res.statuses,
 			VPNHostname:     vpnHost,
 			VPNReachable:    vpnReachable,
+			Plug:            plugInfoFor(h),
 		}
 
 		if config.IsProxmox(h) {
@@ -463,6 +496,239 @@ func VPNRepair(w http.ResponseWriter, r *http.Request) {
 	setSSEHeaders(w)
 	keyPath := config.ResolveSSHKey(cfg, host)
 	ops.StreamVPNRepair(host.IP, host.SSHUser, keyPath, cfg.NordVPNToken, w, r)
+}
+
+// ── Smart plug routes ────────────────────────────────────────────────────────
+
+// plugInfoFor returns the non-secret plug metadata attached to a host.
+func plugInfoFor(h config.Host) *plugInfo {
+	if h.Plug == nil {
+		return nil
+	}
+	return &plugInfo{
+		Provider:        h.Plug.Provider,
+		DeviceName:      h.Plug.DeviceName,
+		DeviceID:        h.Plug.DeviceID,
+		PowerOffSeconds: h.Plug.PowerOffSeconds,
+	}
+}
+
+func plugRefFor(h config.Host) plugRef {
+	return plugRef{
+		Host:       h.Name,
+		DeviceID:   h.Plug.DeviceID,
+		DeviceName: h.Plug.DeviceName,
+	}
+}
+
+// hostWithPlug resolves a host and checks that it has a plug configured.
+func hostWithPlug(cfg config.Config, name string) (config.Host, string) {
+	host, ok := config.GetHost(cfg, name)
+	if !ok {
+		return config.Host{}, fmt.Sprintf("Host '%s' not found", name)
+	}
+	if host.Plug == nil {
+		return config.Host{}, fmt.Sprintf("Host '%s' has no smart plug configured", name)
+	}
+	return host, ""
+}
+
+// hubspaceCredentials resolves the configured credentials or a user-facing
+// error message. Credentials are optional at config load time.
+func hubspaceCredentials(cfg config.Config) (username, password, errMsg string) {
+	username, password = cfg.HubspaceCredentials()
+	if username == "" || password == "" {
+		return "", "", "hubspace credentials not configured; set hubspace.username/password or HUBSPACE_USERNAME/HUBSPACE_PASSWORD"
+	}
+	return username, password, ""
+}
+
+func plugStatusFor(h config.Host, on bool) plugStatus {
+	return plugStatus{
+		Host:            h.Name,
+		Provider:        h.Plug.Provider,
+		DeviceName:      h.Plug.DeviceName,
+		DeviceID:        h.Plug.DeviceID,
+		PowerOffSeconds: h.Plug.PowerOffSeconds,
+		On:              on,
+	}
+}
+
+// ── GET /api/plugs ───────────────────────────────────────────────────────────
+
+func GetPlugs(w http.ResponseWriter, r *http.Request) {
+	cfg, err := config.Load()
+	if err != nil {
+		lhttphandler.ErrorJSON(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	var hosts []config.Host
+	for _, h := range cfg.Hosts {
+		if h.Plug != nil {
+			hosts = append(hosts, h)
+		}
+	}
+	if len(hosts) == 0 {
+		lhttphandler.JSON(w, http.StatusOK, []plugStatus{})
+		return
+	}
+
+	username, password, errMsg := hubspaceCredentials(cfg)
+	if errMsg != "" {
+		lhttphandler.ErrorJSON(w, http.StatusBadRequest, errMsg)
+		return
+	}
+	refs := make([]plugRef, len(hosts))
+	for i, h := range hosts {
+		refs[i] = plugRefFor(h)
+	}
+	states, err := ops.HubspacePlugStates(r.Context(), username, password, refs)
+	if err != nil {
+		lhttphandler.ErrorJSON(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	out := make([]plugStatus, 0, len(hosts))
+	for _, h := range hosts {
+		out = append(out, plugStatusFor(h, states[h.Name]))
+	}
+	lhttphandler.JSON(w, http.StatusOK, out)
+}
+
+// ── GET /api/hosts/{name}/plug ───────────────────────────────────────────────
+
+func PlugStatus(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	cfg, err := config.Load()
+	if err != nil {
+		lhttphandler.ErrorJSON(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	host, errMsg := hostWithPlug(cfg, name)
+	if errMsg != "" {
+		lhttphandler.ErrorJSON(w, http.StatusNotFound, errMsg)
+		return
+	}
+	username, password, errMsg := hubspaceCredentials(cfg)
+	if errMsg != "" {
+		lhttphandler.ErrorJSON(w, http.StatusBadRequest, errMsg)
+		return
+	}
+
+	states, err := ops.HubspacePlugStates(r.Context(), username, password, []plugRef{plugRefFor(host)})
+	if err != nil {
+		lhttphandler.ErrorJSON(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	lhttphandler.JSON(w, http.StatusOK, plugStatusFor(host, states[host.Name]))
+}
+
+// ── POST /api/hosts/{name}/plug/{action} ─────────────────────────────────────
+
+var plugLocks sync.Map // host name -> *sync.Mutex
+
+func acquirePlugLock(host string) (release func(), ok bool) {
+	v, _ := plugLocks.LoadOrStore(host, &sync.Mutex{})
+	m := v.(*sync.Mutex)
+	if !m.TryLock() {
+		return nil, false
+	}
+	return m.Unlock, true
+}
+
+func PlugControl(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	action := r.PathValue("action")
+	if action != "on" && action != "off" && action != "cycle" {
+		lhttphandler.ErrorJSON(w, http.StatusBadRequest,
+			fmt.Sprintf("Invalid plug action '%s'. Must be one of: on, off, cycle", action))
+		return
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		lhttphandler.ErrorJSON(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	host, errMsg := hostWithPlug(cfg, name)
+	if errMsg != "" {
+		lhttphandler.ErrorJSON(w, http.StatusNotFound, errMsg)
+		return
+	}
+	username, password, errMsg := hubspaceCredentials(cfg)
+	if errMsg != "" {
+		lhttphandler.ErrorJSON(w, http.StatusBadRequest, errMsg)
+		return
+	}
+
+	release, ok := acquirePlugLock(name)
+	if !ok {
+		lhttphandler.ErrorJSON(w, http.StatusConflict,
+			fmt.Sprintf("A plug operation is already running for host '%s'", name))
+		return
+	}
+	defer release()
+
+	ref := plugRefFor(host)
+	on := action == "on" || action == "cycle"
+	switch action {
+	case "on", "off":
+		err = ops.HubspaceSetPlug(r.Context(), username, password, ref, on)
+	case "cycle":
+		err = ops.HubspaceCyclePlug(r.Context(), username, password, ref, host.Plug.OffDuration())
+	}
+	if err != nil {
+		lhttphandler.ErrorJSON(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	plugName := host.Plug.DeviceName
+	if plugName == "" {
+		plugName = host.Plug.DeviceID
+	}
+	status := action + " complete"
+	if action == "cycle" {
+		status = "power cycle complete"
+	}
+	lhttphandler.JSON(w, http.StatusOK, plugActionResult{
+		Status: status,
+		Host:   name,
+		Plug:   plugName,
+		On:     on,
+	})
+}
+
+// ── GET /api/hubspace/devices ────────────────────────────────────────────────
+
+func HubspaceDevices(w http.ResponseWriter, r *http.Request) {
+	cfg, err := config.Load()
+	if err != nil {
+		lhttphandler.ErrorJSON(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	username, password, errMsg := hubspaceCredentials(cfg)
+	if errMsg != "" {
+		lhttphandler.ErrorJSON(w, http.StatusBadRequest, errMsg)
+		return
+	}
+	devices, err := ops.HubspaceDevices(r.Context(), username, password)
+	if err != nil {
+		lhttphandler.ErrorJSON(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	type device struct {
+		ID    string `json:"id"`
+		Name  string `json:"name"`
+		Class string `json:"class"`
+	}
+	out := make([]device, 0, len(devices))
+	for _, d := range devices {
+		if d.HasPower && strings.EqualFold(d.Class, "power-outlet") {
+			out = append(out, device{ID: d.ID, Name: d.Name, Class: d.Class})
+		}
+	}
+	lhttphandler.JSON(w, http.StatusOK, out)
 }
 
 // ── VM routes ─────────────────────────────────────────────────────────────────

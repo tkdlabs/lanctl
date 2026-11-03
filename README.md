@@ -89,6 +89,37 @@ hosts:
 
 See `hosts.example.yaml` for the full annotated schema.
 
+### Smart plugs (Hubspace / Home Depot)
+
+Phase 1 supports manual power control for Hubspace power outlets. Attach a plug
+to a host and configure the account once:
+
+```yaml
+config_version: 2
+
+hubspace:
+  username: user@example.com
+  password: "..."
+
+hosts:
+  - name: nas
+    type: proxmox
+    ip: 192.0.2.10
+    mac: "AA:BB:CC:DD:EE:FF"
+    ssh_user: admin
+    plug:
+      provider: hubspace        # optional; defaults to hubspace
+      device_name: "nas-plug"   # or a stable device_id
+      power_off_seconds: 30     # off delay for a power cycle
+```
+
+`HUBSPACE_USERNAME` and `HUBSPACE_PASSWORD` override the YAML values. The
+Hubspace API is unofficial and cloud-based; the plug needs internet access.
+`cycle` is a hard power cut, not a graceful reboot, and is separate from the
+normal `shutdown` action. The native host watchdog is not part of this feature.
+`lanctl-cli plug cycle` waits for the turn-on and allows at least two minutes;
+raise `--timeout` if `power_off_seconds` is longer.
+
 ## Install as a service
 
 On a Linux host with systemd:
@@ -108,12 +139,12 @@ setting with environment variables, e.g.
 `sudo DEPLOY_DIR=/srv/lanctl PORT=8080 ./install.sh`. Unknown flags are
 rejected, so a typo can't silently fall back to the default directory.
 
-Secrets such as `NORDVPN_TOKEN` can come from the environment instead of
-`hosts.yaml`; `install.sh` writes them to the mode-`0600` `.env`, quoted for
-systemd, and keeps them across reinstalls. For a remote install, put them in a
-local file and pass `--env-file FILE` — the file is uploaded over SSH and
-appended to the target's `.env`, so the values never appear in process
-arguments or dry-run output.
+Secrets such as `NORDVPN_TOKEN`, `HUBSPACE_USERNAME`, and `HUBSPACE_PASSWORD`
+can come from the environment instead of `hosts.yaml`; `install.sh` writes them
+to the mode-`0600` `.env`, quoted for systemd, and keeps them across reinstalls.
+For a remote install, put them in a local file and pass `--env-file FILE` — the
+file is uploaded over SSH and appended to the target's `.env`, so the values
+never appear in process arguments or dry-run output.
 
 ### Raspberry Pi
 
@@ -239,6 +270,10 @@ each run allowlists the remote in the service user's gitconfig.
 | GET | `/api/hosts/{name}/services/{svc}/logs/stream` | SSE journal follow |
 | POST | `/api/hosts/{name}/services/{svc}/{action}` | `start` / `stop` / `restart` |
 | POST | `/api/hosts/{name}/vpn-repair` | NordVPN repair stream (SSE) |
+| GET | `/api/plugs` | Configured smart plugs and state |
+| GET | `/api/hosts/{name}/plug` | One host's smart-plug state |
+| POST | `/api/hosts/{name}/plug/{on\|off\|cycle}` | Control a smart plug |
+| GET | `/api/hubspace/devices` | Discover Hubspace power outlets |
 | POST | `/api/hosts/{name}/vms/{vm}/shutdown` | Shut down Proxmox VM |
 | POST | `/api/hosts/{name}/vms/{vm}/vpn-repair` | VM NordVPN repair stream |
 | GET | `/api/hosts/{name}/vms/{vm}/services/{svc}/logs` | VM journal lines |
@@ -260,6 +295,12 @@ lanctl-cli service nas/nas-main nginx restart
 lanctl-cli logs desktop lanctl.service -f        # follow (SSE)
 lanctl-cli logs desktop lanctl.service -n 200    # last 200 lines
 lanctl-cli vpn-repair desktop
+lanctl-cli plugs
+lanctl-cli plug status nas
+lanctl-cli plug on nas
+lanctl-cli plug off nas -y
+lanctl-cli plug cycle nas -y
+lanctl-cli hubspace devices
 lanctl-cli version
 ```
 
@@ -274,8 +315,9 @@ lanctl-cli hosts
 
 Global flags: `-o/--output table|json|plain`, `--timeout`, `-q/--quiet`,
 `--no-color`, `-y/--yes`. Exit codes: `0` success, `1` error, `2` usage.
-`shutdown` prompts for confirmation unless `--yes` or JSON output is used;
-when stdin is not a terminal it refuses without `--yes`.
+`shutdown`, `plug off`, and `plug cycle` prompt for confirmation unless
+`--yes` or JSON output is used; when stdin is not a terminal they refuse
+without `--yes`.
 
 ## Security
 
@@ -290,6 +332,10 @@ shutdown) on the machines it manages.
 - Remote hosts are controlled over SSH with public-key auth; `lanctl` uses
   `InsecureIgnoreHostKey` to match a trust-on-first-use LAN workflow. Treat
   `hosts.yaml` as sensitive and keep it mode `0600`.
+- Hubspace credentials can control every device on that account, not just the
+  configured plug. Keep them in the mode-`0600` config or EnvironmentFile, and
+  prefer a dedicated account if practical. The Hubspace API is unofficial and
+  can change without notice.
 
 ## Development
 

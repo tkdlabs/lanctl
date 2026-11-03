@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // writeConfig writes YAML data to a temp dir and returns its path.
@@ -444,6 +445,212 @@ hosts:
 	}
 	if !strings.Contains(err.Error(), "upgrade") {
 		t.Errorf("error %q should mention upgrading", err)
+	}
+}
+
+func TestLoadFile_HubspacePlug(t *testing.T) {
+	t.Setenv("HUBSPACE_USERNAME", "")
+	t.Setenv("HUBSPACE_PASSWORD", "")
+	path := writeConfig(t, `
+config_version: 2
+hubspace:
+  username: yaml-user
+  password: yaml-pass
+hosts:
+  - name: nas
+    ip: 192.0.2.10
+    mac: "AA:BB:CC:DD:EE:FF"
+    plug:
+      device_name: nas-plug
+      power_off_seconds: 45`)
+
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error: %v", err)
+	}
+	if cfg.ConfigVersion != 2 {
+		t.Errorf("ConfigVersion = %d, want 2", cfg.ConfigVersion)
+	}
+	user, pass := cfg.HubspaceCredentials()
+	if user != "yaml-user" || pass != "yaml-pass" {
+		t.Errorf("credentials = %q/%q, want yaml-user/yaml-pass", user, pass)
+	}
+	p := cfg.Hosts[0].Plug
+	if p == nil {
+		t.Fatal("Plug is nil")
+	}
+	if p.Provider != PlugProviderHubspace {
+		t.Errorf("Provider = %q, want %q", p.Provider, PlugProviderHubspace)
+	}
+	if p.DeviceName != "nas-plug" {
+		t.Errorf("DeviceName = %q, want nas-plug", p.DeviceName)
+	}
+	if got := p.OffDuration(); got != 45*time.Second {
+		t.Errorf("OffDuration = %s, want 45s", got)
+	}
+	if !cfg.HasPlugs() {
+		t.Error("HasPlugs() = false, want true")
+	}
+	if got := cfg.PlugHosts(); len(got) != 1 || got[0] != "nas" {
+		t.Errorf("PlugHosts() = %v, want [nas]", got)
+	}
+}
+
+func TestLoadFile_PlugDefaults(t *testing.T) {
+	t.Setenv("HUBSPACE_USERNAME", "")
+	t.Setenv("HUBSPACE_PASSWORD", "")
+	path := writeConfig(t, `
+hosts:
+  - name: nas
+    ip: 192.0.2.10
+    mac: "AA:BB:CC:DD:EE:FF"
+    plug:
+      device_id: "00000000-0000-0000-0000-000000000000"`)
+
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error: %v", err)
+	}
+	p := cfg.Hosts[0].Plug
+	if p.Provider != PlugProviderHubspace {
+		t.Errorf("Provider = %q, want default %q", p.Provider, PlugProviderHubspace)
+	}
+	if got := p.OffDuration(); got != 30*time.Second {
+		t.Errorf("OffDuration = %s, want default 30s", got)
+	}
+}
+
+func TestLoadFile_HubspaceEnvOverridesYAML(t *testing.T) {
+	t.Setenv("HUBSPACE_USERNAME", "env-user")
+	t.Setenv("HUBSPACE_PASSWORD", "env-pass")
+	path := writeConfig(t, `
+hubspace:
+  username: yaml-user
+  password: yaml-pass
+hosts:
+  - name: nas
+    ip: 192.0.2.10
+    mac: "AA:BB:CC:DD:EE:FF"`)
+
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error: %v", err)
+	}
+	user, pass := cfg.HubspaceCredentials()
+	if user != "env-user" || pass != "env-pass" {
+		t.Errorf("credentials = %q/%q, want env-user/env-pass", user, pass)
+	}
+}
+
+func TestLoadFile_HubspaceEnvPartial(t *testing.T) {
+	t.Setenv("HUBSPACE_USERNAME", "env-user")
+	t.Setenv("HUBSPACE_PASSWORD", "")
+	path := writeConfig(t, `
+hubspace:
+  username: yaml-user
+  password: yaml-pass
+hosts:
+  - name: nas
+    ip: 192.0.2.10
+    mac: "AA:BB:CC:DD:EE:FF"`)
+
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error: %v", err)
+	}
+	user, pass := cfg.HubspaceCredentials()
+	if user != "env-user" || pass != "yaml-pass" {
+		t.Errorf("credentials = %q/%q, want env-user/yaml-pass", user, pass)
+	}
+}
+
+func TestLoadFile_HubspaceEnvOnly(t *testing.T) {
+	t.Setenv("HUBSPACE_USERNAME", "env-user")
+	t.Setenv("HUBSPACE_PASSWORD", "env-pass")
+	path := writeConfig(t, `
+hosts:
+  - name: nas
+    ip: 192.0.2.10
+    mac: "AA:BB:CC:DD:EE:FF"`)
+
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error: %v", err)
+	}
+	user, pass := cfg.HubspaceCredentials()
+	if user != "env-user" || pass != "env-pass" {
+		t.Errorf("credentials = %q/%q, want env-user/env-pass", user, pass)
+	}
+}
+
+func TestConfigHelpers(t *testing.T) {
+	cfg := Config{}
+	if user, pass := cfg.HubspaceCredentials(); user != "" || pass != "" {
+		t.Errorf("nil Hubspace credentials = %q/%q, want empty", user, pass)
+	}
+	if cfg.HasPlugs() {
+		t.Error("empty config HasPlugs() = true")
+	}
+	if got := cfg.PlugHosts(); len(got) != 0 {
+		t.Errorf("empty config PlugHosts() = %v", got)
+	}
+	if got := (Plug{}).OffDuration(); got != 30*time.Second {
+		t.Errorf("zero Plug.OffDuration() = %s, want 30s", got)
+	}
+	if got := (Plug{PowerOffSeconds: 5}).OffDuration(); got != 5*time.Second {
+		t.Errorf("Plug.OffDuration() = %s, want 5s", got)
+	}
+}
+
+func TestLoadFile_PlugValidation(t *testing.T) {
+	t.Setenv("HUBSPACE_USERNAME", "")
+	t.Setenv("HUBSPACE_PASSWORD", "")
+	tests := []struct {
+		name string
+		plug string
+		want string
+	}{
+		{
+			name: "unsupported provider",
+			plug: "      provider: other\n      device_name: plug",
+			want: "unsupported plug provider",
+		},
+		{
+			name: "missing device",
+			plug: "      provider: hubspace",
+			want: "needs device_id or device_name",
+		},
+		{
+			name: "negative delay",
+			plug: "      device_name: plug\n      power_off_seconds: -1",
+			want: "power_off_seconds",
+		},
+		{
+			name: "too long delay",
+			plug: "      device_name: plug\n      power_off_seconds: 601",
+			want: "power_off_seconds",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeConfig(t, `
+hosts:
+  - name: nas
+    ip: 192.0.2.10
+    mac: "AA:BB:CC:DD:EE:FF"
+    plug:
+`+tt.plug+"\n")
+			_, err := LoadFile(path)
+			if err == nil {
+				t.Fatal("expected validation error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error %q should contain %q", err, tt.want)
+			}
+			if !strings.Contains(err.Error(), "nas") {
+				t.Errorf("error %q should name the host", err)
+			}
+		})
 	}
 }
 
