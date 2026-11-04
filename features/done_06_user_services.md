@@ -20,12 +20,13 @@ hosts:
     user_services: [myapp-backend] # systemd --user units
 ```
 
-- On remote hosts, user services belong to the **SSH user's** user manager.
-  The SSH user needs lingering (`loginctl enable-linger <user>`) or an active
-  session; remote commands are prefixed with
-  `XDG_RUNTIME_DIR=/run/user/$(id -u)` so `systemctl --user` can find the bus.
-- On `local: true` hosts, they belong to the **lanctl process user's** user
-  manager.
+- On remote hosts and on `local: true` hosts/VMs, user services belong to the
+  configured **`ssh_user`'s** user manager. That user needs lingering
+  (`loginctl enable-linger <user>`) or an active session; commands are given
+  `XDG_RUNTIME_DIR=/run/user/<uid>` so `systemctl --user` can find the bus.
+- When lanctl runs as root and the local `ssh_user` differs, local user-scoped
+  commands switch to that user (`sudo -n -u <ssh_user> env ...`). An empty
+  `ssh_user` keeps the old lanctl-process-user behavior.
 - A name in both lists resolves to the user scope.
 
 ## Behavior
@@ -33,7 +34,7 @@ hosts:
 | Operation | System service | User service |
 |-----------|----------------|--------------|
 | Status | `systemctl is-active` | `systemctl --user is-active` |
-| Control | `sudo systemctl <action>` (local/SSH) | `systemctl --user <action>` (no sudo) |
+| Control | `sudo systemctl <action>` (local/SSH) | `systemctl --user <action>` (local cross-user: `sudo -u <ssh_user>`) |
 | Logs | `journalctl -u` | `journalctl --user -u` |
 
 API routes are unchanged: scope is resolved from `hosts.yaml` by service name.

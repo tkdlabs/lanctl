@@ -45,6 +45,8 @@ type fakeOps struct {
 
 	// userScope records the scope passed to each service call, in order.
 	userScope []bool
+	// users records the local user passed to each service call, in order.
+	users []string
 }
 
 func (f *fakeOps) SendMagicPacket(mac, broadcast string, port int) error {
@@ -61,23 +63,27 @@ func (f *fakeOps) Shutdown() error {
 	return f.shutdownErr
 }
 
-func (f *fakeOps) ServiceStatuses(services []string, userScope bool) (map[string]string, error) {
+func (f *fakeOps) ServiceStatuses(services []string, userScope bool, user string) (map[string]string, error) {
 	f.userScope = append(f.userScope, userScope)
+	f.users = append(f.users, user)
 	return statusMap(services), nil
 }
 
-func (f *fakeOps) ServiceControl(service, action string, userScope bool) error {
+func (f *fakeOps) ServiceControl(service, action string, userScope bool, user string) error {
 	f.userScope = append(f.userScope, userScope)
+	f.users = append(f.users, user)
 	return f.serviceControlErr
 }
 
-func (f *fakeOps) JournalLines(service string, n int, userScope bool) (string, error) {
+func (f *fakeOps) JournalLines(service string, n int, userScope bool, user string) (string, error) {
 	f.userScope = append(f.userScope, userScope)
+	f.users = append(f.users, user)
 	return f.journalLinesOut, f.journalLinesErr
 }
 
-func (f *fakeOps) StreamJournal(service string, userScope bool, w http.ResponseWriter, r *http.Request) {
+func (f *fakeOps) StreamJournal(service string, userScope bool, user string, w http.ResponseWriter, r *http.Request) {
 	f.userScope = append(f.userScope, userScope)
+	f.users = append(f.users, user)
 }
 
 func (f *fakeOps) SSHShutdown(ip, user, keyPath string) error { return f.sshShutdownErr }
@@ -138,6 +144,19 @@ func (f *fakeOps) scopesSeen(want ...bool) bool {
 	}
 	for i, w := range want {
 		if f.userScope[i] != w {
+			return false
+		}
+	}
+	return true
+}
+
+// usersSeen returns true if the recorded local users match want.
+func (f *fakeOps) usersSeen(want ...string) bool {
+	if len(f.users) != len(want) {
+		return false
+	}
+	for i, w := range want {
+		if f.users[i] != w {
 			return false
 		}
 	}
@@ -1167,6 +1186,69 @@ func TestStreamLogs_UserService(t *testing.T) {
 	}
 }
 
+const localUserServiceHostConfig = `
+hosts:
+  - name: local
+    ip: 127.0.0.1
+    mac: ""
+    local: true
+    ssh_user: appuser
+    services: [nginx]
+    user_services: [myapp-backend]
+`
+
+func TestGetHosts_LocalUserServicesUseSSHUser(t *testing.T) {
+	f := useFakeOps(t)
+	writeConfig(t, localUserServiceHostConfig)
+	rr := doRequest(t, "GET", "/api/hosts")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !f.scopesSeen(false, true) {
+		t.Errorf("expected system then user scope, got %v", f.userScope)
+	}
+	if !f.usersSeen("appuser", "appuser") {
+		t.Errorf("expected local calls as appuser, got %v", f.users)
+	}
+}
+
+func TestServiceControl_LocalUserServiceUsesSSHUser(t *testing.T) {
+	f := useFakeOps(t)
+	writeConfig(t, localUserServiceHostConfig)
+	rr := doRequest(t, "POST", "/api/hosts/local/services/myapp-backend/restart")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !f.usersSeen("appuser") {
+		t.Errorf("expected local control as appuser, got %v", f.users)
+	}
+}
+
+func TestGetLogs_LocalUserServiceUsesSSHUser(t *testing.T) {
+	f := useFakeOps(t)
+	f.journalLinesOut = "hello\n"
+	writeConfig(t, localUserServiceHostConfig)
+	rr := doRequest(t, "GET", "/api/hosts/local/services/myapp-backend/logs")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !f.usersSeen("appuser") {
+		t.Errorf("expected local logs as appuser, got %v", f.users)
+	}
+}
+
+func TestStreamLogs_LocalUserServiceUsesSSHUser(t *testing.T) {
+	f := useFakeOps(t)
+	writeConfig(t, localUserServiceHostConfig)
+	rr := doRequest(t, "GET", "/api/hosts/local/services/myapp-backend/logs/stream")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if !f.usersSeen("appuser") {
+		t.Errorf("expected local stream as appuser, got %v", f.users)
+	}
+}
+
 const userServiceVMConfig = `
 hosts:
   - name: pve
@@ -1228,6 +1310,62 @@ func TestVMGetLogs_UserService(t *testing.T) {
 	}
 	if !f.scopesSeen(true) {
 		t.Errorf("expected user scope, got %v", f.userScope)
+	}
+}
+
+const localUserServiceVMConfig = `
+hosts:
+  - name: pve
+    type: proxmox
+    ip: 192.0.2.10
+    mac: "aa:bb:cc:dd:ee:ff"
+    ssh_user: root
+    vms:
+      - name: vm1
+        ip: 127.0.0.1
+        local: true
+        ssh_user: appuser
+        services: [nginx]
+        user_services: [myapp.service]
+`
+
+func TestGetHosts_LocalVMUserServicesUseSSHUser(t *testing.T) {
+	f := useFakeOps(t)
+	writeConfig(t, localUserServiceVMConfig)
+	rr := doRequest(t, "GET", "/api/hosts")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !f.scopesSeen(false, true) {
+		t.Errorf("expected system then user scope, got %v", f.userScope)
+	}
+	if !f.usersSeen("appuser", "appuser") {
+		t.Errorf("expected local VM calls as appuser, got %v", f.users)
+	}
+}
+
+func TestVMServiceControl_LocalUserServiceUsesSSHUser(t *testing.T) {
+	f := useFakeOps(t)
+	writeConfig(t, localUserServiceVMConfig)
+	rr := doRequest(t, "POST", "/api/hosts/pve/vms/vm1/services/myapp.service/restart")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !f.usersSeen("appuser") {
+		t.Errorf("expected local VM control as appuser, got %v", f.users)
+	}
+}
+
+func TestVMGetLogs_LocalUserServiceUsesSSHUser(t *testing.T) {
+	f := useFakeOps(t)
+	f.journalLinesOut = "hello\n"
+	writeConfig(t, localUserServiceVMConfig)
+	rr := doRequest(t, "GET", "/api/hosts/pve/vms/vm1/services/myapp.service/logs")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !f.usersSeen("appuser") {
+		t.Errorf("expected local VM logs as appuser, got %v", f.users)
 	}
 }
 

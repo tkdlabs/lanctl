@@ -127,7 +127,7 @@ func serviceStatuses(label string, local bool, ip, sshUser, keyPath string, serv
 		var s map[string]string
 		var err error
 		if local {
-			s, err = ops.ServiceStatuses(group.names, group.userScope)
+			s, err = ops.ServiceStatuses(group.names, group.userScope, sshUser)
 		} else {
 			s, err = ops.SSHServiceStatuses(ip, sshUser, keyPath, group.names, group.userScope)
 		}
@@ -386,7 +386,7 @@ func GetLogs(w http.ResponseWriter, r *http.Request) {
 
 	var out string
 	if host.Local {
-		out, err = ops.JournalLines(service, lines, userScope)
+		out, err = ops.JournalLines(service, lines, userScope, host.SSHUser)
 	} else {
 		keyPath := config.ResolveSSHKey(cfg, host)
 		out, err = ops.SSHJournalLines(host.IP, host.SSHUser, keyPath, service, lines, userScope)
@@ -424,7 +424,7 @@ func StreamLogs(w http.ResponseWriter, r *http.Request) {
 
 	setSSEHeaders(w)
 	if host.Local {
-		ops.StreamJournal(service, scope == config.ScopeUser, w, r)
+		ops.StreamJournal(service, scope == config.ScopeUser, host.SSHUser, w, r)
 	} else {
 		keyPath := config.ResolveSSHKey(cfg, host)
 		ops.SSHStreamJournal(host.IP, host.SSHUser, keyPath, service, scope == config.ScopeUser, w, r)
@@ -460,7 +460,7 @@ func ServiceControl(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if host.Local {
-		err = ops.ServiceControl(service, action, scope == config.ScopeUser)
+		err = ops.ServiceControl(service, action, scope == config.ScopeUser, host.SSHUser)
 	} else {
 		keyPath := config.ResolveSSHKey(cfg, host)
 		err = ops.SSHServiceControl(host.IP, host.SSHUser, keyPath, service, action, scope == config.ScopeUser)
@@ -822,7 +822,7 @@ func VMGetLogs(w http.ResponseWriter, r *http.Request) {
 
 	var out string
 	if vm.Local {
-		out, err = ops.JournalLines(service, lines, scope == config.ScopeUser)
+		out, err = ops.JournalLines(service, lines, scope == config.ScopeUser, vm.SSHUser)
 	} else {
 		keyPath := config.ResolveVMSSHKey(cfg, host, vm)
 		out, err = ops.SSHJournalLines(vm.IP, vm.SSHUser, keyPath, service, lines, scope == config.ScopeUser)
@@ -860,7 +860,7 @@ func VMStreamLogs(w http.ResponseWriter, r *http.Request) {
 
 	setSSEHeaders(w)
 	if vm.Local {
-		ops.StreamJournal(service, scope == config.ScopeUser, w, r)
+		ops.StreamJournal(service, scope == config.ScopeUser, vm.SSHUser, w, r)
 	} else {
 		keyPath := config.ResolveVMSSHKey(cfg, host, vm)
 		ops.SSHStreamJournal(vm.IP, vm.SSHUser, keyPath, service, scope == config.ScopeUser, w, r)
@@ -897,7 +897,7 @@ func VMServiceControl(w http.ResponseWriter, r *http.Request) {
 
 	var err2 error
 	if vm.Local {
-		err2 = ops.ServiceControl(service, action, scope == config.ScopeUser)
+		err2 = ops.ServiceControl(service, action, scope == config.ScopeUser, vm.SSHUser)
 	} else {
 		keyPath := config.ResolveVMSSHKey(cfg, host, vm)
 		err2 = ops.SSHServiceControl(vm.IP, vm.SSHUser, keyPath, service, action, scope == config.ScopeUser)

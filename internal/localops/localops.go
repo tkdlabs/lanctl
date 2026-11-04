@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	osuser "os/user"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -24,13 +26,59 @@ var runSudo = func(name string, args ...string) ([]byte, error) {
 	return exec.Command("sudo", append([]string{name}, args...)...).CombinedOutput()
 }
 
-// runUser executes a command as the current user with an environment that can
-// reach the systemd user manager (XDG_RUNTIME_DIR is absent when lanctl runs
-// as a system service). It is a package variable so tests can substitute a fake.
-var runUser = func(name string, args ...string) ([]byte, error) {
-	cmd := exec.Command(name, args...)
-	cmd.Env = runtimeDirEnv()
+// runUser executes a command against a user's systemd manager. An empty user,
+// or the process user, runs directly with XDG_RUNTIME_DIR defaulted; a
+// different user is reached through sudo (the process must be root). It is a
+// package variable so tests can substitute a fake.
+var runUser = func(user, name string, args ...string) ([]byte, error) {
+	cmdName, cmdArgs, env, err := userCommand(user, name, args...)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(cmdName, cmdArgs...)
+	if env != nil {
+		cmd.Env = env
+	}
 	return cmd.Output()
+}
+
+// lookupUserID resolves a user name (or numeric UID) to its numeric UID.
+var lookupUserID = func(name string) (int, error) {
+	if uid, err := strconv.Atoi(name); err == nil {
+		return uid, nil
+	}
+	u, err := osuser.Lookup(name)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(u.Uid)
+}
+
+// userCommand builds the command that runs name/args in user's systemd
+// instance. An empty user, or the process user, runs directly with
+// XDG_RUNTIME_DIR defaulted. A different user requires root and is reached
+// through sudo with that user's runtime directory.
+func userCommand(user, name string, args ...string) (string, []string, []string, error) {
+	return userCommandFor(user, name, args, os.Getuid(), os.Geteuid(), lookupUserID)
+}
+
+func userCommandFor(user, name string, args []string, uid, euid int, lookup func(string) (int, error)) (string, []string, []string, error) {
+	if user == "" {
+		return name, args, runtimeDirEnv(), nil
+	}
+	targetUID, err := lookup(user)
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("resolve user %q: %w", user, err)
+	}
+	if targetUID == uid {
+		return name, args, runtimeDirEnv(), nil
+	}
+	if euid != 0 {
+		return "", nil, nil, fmt.Errorf("cannot run user-scoped command as %q: lanctl runs as uid %d and is not root", user, uid)
+	}
+	sudoArgs := []string{"-n", "-u", user, "env", fmt.Sprintf("XDG_RUNTIME_DIR=/run/user/%d", targetUID), name}
+	sudoArgs = append(sudoArgs, args...)
+	return "sudo", sudoArgs, nil, nil
 }
 
 // runtimeDirEnv returns the current environment with XDG_RUNTIME_DIR defaulted
@@ -82,14 +130,22 @@ func Shutdown() error {
 
 // ServiceStatuses runs `systemctl [--user] is-active` for each service and
 // returns a map. systemctl exits non-zero when any service is inactive, so we
-// ignore the error.
-func ServiceStatuses(services []string, userScope bool) (map[string]string, error) {
+// ignore exit errors; setup errors (unknown user, privilege switching) are
+// returned.
+func ServiceStatuses(services []string, userScope bool, user string) (map[string]string, error) {
 	args := systemctlArgs(userScope, "is-active", services...)
 	var out []byte
+	var err error
 	if userScope {
-		out, _ = runUser("systemctl", args...)
+		out, err = runUser(user, "systemctl", args...)
 	} else {
-		out, _ = run("systemctl", args...)
+		out, err = run("systemctl", args...)
+	}
+	if err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			return nil, err
+		}
 	}
 	return parseStatusOutput(string(out), services), nil
 }
@@ -110,14 +166,14 @@ func parseStatusOutput(out string, services []string) map[string]string {
 }
 
 // ServiceControl runs `sudo systemctl <action> <service>` for system services
-// and `systemctl --user <action> <service>` for user services (no elevation:
-// user-scoped units are owned by the lanctl process user).
-func ServiceControl(service, action string, userScope bool) error {
+// and `systemctl --user <action> <service>` for user services, switching to
+// the configured user when lanctl itself runs as root.
+func ServiceControl(service, action string, userScope bool, user string) error {
 	args := systemctlArgs(userScope, action, service)
 	var out []byte
 	var err error
 	if userScope {
-		out, err = runUser("systemctl", args...)
+		out, err = runUser(user, "systemctl", args...)
 	} else {
 		out, err = runSudo("systemctl", args...)
 	}
@@ -132,12 +188,12 @@ func ServiceControl(service, action string, userScope bool) error {
 }
 
 // JournalLines returns the last n lines of a service's journal.
-func JournalLines(service string, n int, userScope bool) (string, error) {
+func JournalLines(service string, n int, userScope bool, user string) (string, error) {
 	args := journalctlArgs(userScope, service, n, false)
 	var out []byte
 	var err error
 	if userScope {
-		out, err = runUser("journalctl", args...)
+		out, err = runUser(user, "journalctl", args...)
 	} else {
 		out, err = run("journalctl", args...)
 	}
@@ -153,17 +209,38 @@ var streamCmd = func(ctx context.Context, name string, args ...string) *exec.Cmd
 	return exec.CommandContext(ctx, name, args...)
 }
 
+// streamUserCmd builds the stream command for a user-scoped journal read.
+func streamUserCmd(ctx context.Context, user, name string, args ...string) (*exec.Cmd, error) {
+	cmdName, cmdArgs, env, err := userCommand(user, name, args...)
+	if err != nil {
+		return nil, err
+	}
+	cmd := streamCmd(ctx, cmdName, cmdArgs...)
+	if env != nil {
+		cmd.Env = env
+	}
+	return cmd, nil
+}
+
 // StreamJournal streams journalctl -f output to w via SSE until r.Context() is done.
-func StreamJournal(service string, userScope bool, w http.ResponseWriter, r *http.Request) {
+func StreamJournal(service string, userScope bool, user string, w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return
 	}
 
 	args := journalctlArgs(userScope, service, 50, true)
-	cmd := streamCmd(r.Context(), "journalctl", args...)
+	var cmd *exec.Cmd
 	if userScope {
-		cmd.Env = runtimeDirEnv()
+		var err error
+		cmd, err = streamUserCmd(r.Context(), user, "journalctl", args...)
+		if err != nil {
+			fmt.Fprintf(w, "data: [error: %v]\n\n", err)
+			flusher.Flush()
+			return
+		}
+	} else {
+		cmd = streamCmd(r.Context(), "journalctl", args...)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

@@ -93,8 +93,9 @@ type ServiceScope string
 const (
 	// ScopeSystem is the system-wide systemd instance (systemctl).
 	ScopeSystem ServiceScope = "system"
-	// ScopeUser is a systemd user instance: that of the SSH user on remote
-	// hosts, or of the lanctl process user on local hosts (systemctl --user).
+	// ScopeUser is a systemd user instance: that of the configured ssh_user on
+	// both local and remote hosts (systemctl --user). On local hosts an empty
+	// ssh_user falls back to the lanctl process user.
 	ScopeUser ServiceScope = "user"
 )
 

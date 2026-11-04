@@ -51,8 +51,8 @@ hosts:
     # ssh_user: tom            # add when sharing this file across boxes (see note at top)
     services:
       - lanctl-backend
-    # user_services:                 # systemd --user units of the lanctl
-    #   - myapp-backend              # process user (systemctl --user)
+    # user_services:                 # systemd --user units of ssh_user
+    #   - myapp-backend              # (or the lanctl process user if unset)
 
   - name: desktop
     ip: 192.168.0.100

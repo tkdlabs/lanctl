@@ -25,8 +25,12 @@ func stubRun(t *testing.T, out []byte, err error) *[][]string {
 		calls = append(calls, append([]string{"sudo", name}, args...))
 		return out, err
 	}
-	runUser = func(name string, args ...string) ([]byte, error) {
-		calls = append(calls, append([]string{name}, args...))
+	runUser = func(user, name string, args ...string) ([]byte, error) {
+		call := append([]string{name}, args...)
+		if user != "" {
+			call = append([]string{"user=" + user}, call...)
+		}
+		calls = append(calls, call)
 		return out, err
 	}
 	t.Cleanup(func() { run, runSudo, runUser = prevRun, prevSudo, prevUser })
@@ -138,7 +142,7 @@ func TestShutdown_EnabledPropagatesError(t *testing.T) {
 
 func TestServiceStatuses(t *testing.T) {
 	calls := stubRun(t, []byte("active\ninactive\n"), nil)
-	statuses, err := ServiceStatuses([]string{"nginx", "docker"}, false)
+	statuses, err := ServiceStatuses([]string{"nginx", "docker"}, false, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -152,7 +156,7 @@ func TestServiceStatuses(t *testing.T) {
 
 func TestServiceStatuses_UserScope(t *testing.T) {
 	calls := stubRun(t, []byte("active\n"), nil)
-	statuses, err := ServiceStatuses([]string{"myapp-backend"}, true)
+	statuses, err := ServiceStatuses([]string{"myapp-backend"}, true, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -164,9 +168,120 @@ func TestServiceStatuses_UserScope(t *testing.T) {
 	}
 }
 
+func TestServiceStatuses_UserScopePassesUser(t *testing.T) {
+	calls := stubRun(t, []byte("active\n"), nil)
+	if _, err := ServiceStatuses([]string{"myapp-backend"}, true, "appuser"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "user=appuser systemctl --user is-active myapp-backend"
+	if got := strings.Join((*calls)[0], " "); got != want {
+		t.Errorf("got command %q, want %q", got, want)
+	}
+}
+
+func TestServiceStatuses_SetupErrorIsReturned(t *testing.T) {
+	stubRun(t, nil, errors.New("user lookup failed"))
+	if _, err := ServiceStatuses([]string{"myapp-backend"}, true, "appuser"); err == nil {
+		t.Fatal("expected setup error to be returned")
+	}
+}
+
+func TestServiceStatuses_ExitErrorIsIgnored(t *testing.T) {
+	exitErr := exec.Command("sh", "-c", "exit 3").Run()
+	if exitErr == nil {
+		t.Fatal("expected a non-zero exit error")
+	}
+	stubRun(t, []byte("inactive\n"), exitErr)
+	statuses, err := ServiceStatuses([]string{"myapp-backend"}, false, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if statuses["myapp-backend"] != "inactive" {
+		t.Errorf("status = %q, want inactive", statuses["myapp-backend"])
+	}
+}
+
+func TestUserCommandFor(t *testing.T) {
+	lookup := func(name string) (int, error) {
+		switch name {
+		case "same":
+			return 1000, nil
+		case "other":
+			return 2000, nil
+		default:
+			return 0, fmt.Errorf("unknown user %q", name)
+		}
+	}
+	args := []string{"--user", "is-active", "svc"}
+	tests := []struct {
+		name      string
+		user      string
+		uid, euid int
+		wantName  string
+		wantArgs  []string
+		wantEnv   bool
+		wantErr   string
+	}{
+		{
+			name: "empty uses process user", user: "", uid: 1000, euid: 1000,
+			wantName: "systemctl", wantArgs: args, wantEnv: true,
+		},
+		{
+			name: "same user runs directly", user: "same", uid: 1000, euid: 1000,
+			wantName: "systemctl", wantArgs: args, wantEnv: true,
+		},
+		{
+			name: "other user as root uses sudo", user: "other", uid: 1000, euid: 0,
+			wantName: "sudo",
+			wantArgs: []string{"-n", "-u", "other", "env", "XDG_RUNTIME_DIR=/run/user/2000", "systemctl", "--user", "is-active", "svc"},
+		},
+		{
+			name: "other user as non-root fails", user: "other", uid: 1000, euid: 1000,
+			wantErr: "not root",
+		},
+		{
+			name: "unknown user fails", user: "missing", uid: 1000, euid: 0,
+			wantErr: "unknown user",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotName, gotArgs, env, err := userCommandFor(tt.user, "systemctl", args, tt.uid, tt.euid, lookup)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("got error %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if gotName != tt.wantName {
+				t.Errorf("name = %q, want %q", gotName, tt.wantName)
+			}
+			if strings.Join(gotArgs, " ") != strings.Join(tt.wantArgs, " ") {
+				t.Errorf("args = %q, want %q", gotArgs, tt.wantArgs)
+			}
+			if (env != nil) != tt.wantEnv {
+				t.Errorf("env = %v, want non-nil=%v", env, tt.wantEnv)
+			}
+		})
+	}
+}
+
+func TestLookupUserID_Numeric(t *testing.T) {
+	uid, err := lookupUserID("1234")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if uid != 1234 {
+		t.Errorf("uid = %d, want 1234", uid)
+	}
+}
+
 func TestServiceControl_Success(t *testing.T) {
 	calls := stubRun(t, nil, nil)
-	if err := ServiceControl("nginx", "restart", false); err != nil {
+	if err := ServiceControl("nginx", "restart", false, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got := strings.Join((*calls)[0], " "); got != "sudo systemctl restart nginx" {
@@ -176,7 +291,7 @@ func TestServiceControl_Success(t *testing.T) {
 
 func TestServiceControl_UserScope(t *testing.T) {
 	calls := stubRun(t, nil, nil)
-	if err := ServiceControl("myapp-backend", "restart", true); err != nil {
+	if err := ServiceControl("myapp-backend", "restart", true, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got := strings.Join((*calls)[0], " "); got != "systemctl --user restart myapp-backend" {
@@ -184,9 +299,20 @@ func TestServiceControl_UserScope(t *testing.T) {
 	}
 }
 
+func TestServiceControl_UserScopePassesUser(t *testing.T) {
+	calls := stubRun(t, nil, nil)
+	if err := ServiceControl("myapp-backend", "restart", true, "appuser"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "user=appuser systemctl --user restart myapp-backend"
+	if got := strings.Join((*calls)[0], " "); got != want {
+		t.Errorf("got command %q, want %q", got, want)
+	}
+}
+
 func TestServiceControl_ErrorUsesOutput(t *testing.T) {
 	stubRun(t, []byte("Job failed. See logs.\n"), errors.New("exit 1"))
-	err := ServiceControl("nginx", "restart", false)
+	err := ServiceControl("nginx", "restart", false, "")
 	if err == nil || err.Error() != "Job failed. See logs." {
 		t.Fatalf("got %v, want trimmed command output", err)
 	}
@@ -194,7 +320,7 @@ func TestServiceControl_ErrorUsesOutput(t *testing.T) {
 
 func TestServiceControl_ErrorWithoutOutput(t *testing.T) {
 	stubRun(t, []byte("   "), errors.New("exit 1"))
-	err := ServiceControl("nginx", "stop", false)
+	err := ServiceControl("nginx", "stop", false, "")
 	want := "systemctl stop nginx failed"
 	if err == nil || err.Error() != want {
 		t.Fatalf("got %v, want %q", err, want)
@@ -203,7 +329,7 @@ func TestServiceControl_ErrorWithoutOutput(t *testing.T) {
 
 func TestJournalLines_Success(t *testing.T) {
 	calls := stubRun(t, []byte("line one\nline two\n"), nil)
-	out, err := JournalLines("nginx", 10, false)
+	out, err := JournalLines("nginx", 10, false, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -218,7 +344,7 @@ func TestJournalLines_Success(t *testing.T) {
 
 func TestJournalLines_UserScope(t *testing.T) {
 	calls := stubRun(t, []byte("log line\n"), nil)
-	if _, err := JournalLines("myapp-backend", 25, true); err != nil {
+	if _, err := JournalLines("myapp-backend", 25, true, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	want := "journalctl --user -u myapp-backend -n 25 --no-pager --output=short-iso"
@@ -227,9 +353,20 @@ func TestJournalLines_UserScope(t *testing.T) {
 	}
 }
 
+func TestJournalLines_UserScopePassesUser(t *testing.T) {
+	calls := stubRun(t, []byte("log line\n"), nil)
+	if _, err := JournalLines("myapp-backend", 25, true, "appuser"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "user=appuser journalctl --user -u myapp-backend -n 25 --no-pager --output=short-iso"
+	if got := strings.Join((*calls)[0], " "); got != want {
+		t.Errorf("got command %q, want %q", got, want)
+	}
+}
+
 func TestJournalLines_Error(t *testing.T) {
 	stubRun(t, nil, errors.New("no journal"))
-	if _, err := JournalLines("nginx", 10, false); err == nil {
+	if _, err := JournalLines("nginx", 10, false, ""); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -242,7 +379,7 @@ func TestStreamJournal_StreamsOutput(t *testing.T) {
 	t.Cleanup(func() { streamCmd = prev })
 
 	rr := httptest.NewRecorder()
-	StreamJournal("svc", false, rr, httptest.NewRequest("GET", "/", nil))
+	StreamJournal("svc", false, "", rr, httptest.NewRequest("GET", "/", nil))
 
 	body := rr.Body.String()
 	if !strings.Contains(body, "data: line one") || !strings.Contains(body, "data: line two") {
@@ -259,7 +396,7 @@ func TestStreamJournal_UserScopeArgs(t *testing.T) {
 	}
 	t.Cleanup(func() { streamCmd = prev })
 
-	StreamJournal("myapp-backend", true, httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
+	StreamJournal("myapp-backend", true, "", httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
 
 	want := "--user -u myapp-backend -f -n 50 --no-pager --output=short-iso"
 	if got := strings.Join(gotArgs, " "); got != want {
@@ -267,9 +404,20 @@ func TestStreamJournal_UserScopeArgs(t *testing.T) {
 	}
 }
 
+func TestStreamJournal_UserSwitchError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("switch error only applies to a non-root process")
+	}
+	rr := httptest.NewRecorder()
+	StreamJournal("myapp-backend", true, "definitely-not-current-lanctl-user", rr, httptest.NewRequest("GET", "/", nil))
+	if !strings.Contains(rr.Body.String(), "data: [error:") {
+		t.Errorf("expected an error event, got %q", rr.Body.String())
+	}
+}
+
 func TestStreamJournal_NoFlusher(t *testing.T) {
 	w := &noFlushWriter{}
-	StreamJournal("svc", false, w, httptest.NewRequest("GET", "/", nil))
+	StreamJournal("svc", false, "", w, httptest.NewRequest("GET", "/", nil))
 	if w.written {
 		t.Error("nothing should be written when the writer cannot flush")
 	}

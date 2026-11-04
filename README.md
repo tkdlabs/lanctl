@@ -70,11 +70,12 @@ hosts:
   be supplied as `NORDVPN_TOKEN` in the environment; the environment wins over
   `hosts.yaml`, so a shared config can omit the token.
 - `services` are system units (`systemctl`); `user_services` are systemd user
-  units (`systemctl --user`). For remote hosts these run in the SSH user's
-  user manager, so that user needs lingering enabled
-  (`loginctl enable-linger <user>`). For `local: true` hosts they run in the
-  lanctl process user's manager. Status, logs, and start/stop/restart all
-  respect the scope; logs are read with `journalctl --user`.
+  units (`systemctl --user`). They run in the configured `ssh_user`'s user
+  manager on both local and remote hosts, so that user needs lingering enabled
+  (`loginctl enable-linger <user>`). When lanctl runs as root and `ssh_user`
+  differs, local user-scoped commands switch to that user; if `ssh_user` is
+  empty, the lanctl process user is used. Status, logs, and start/stop/restart
+  all respect the scope; logs are read with `journalctl --user`.
 
 > **SSH keys are read as the lanctl process user, not as you.** `ssh_key` (and
 > the `~` inside it) is resolved by the running process. Installed as a systemd

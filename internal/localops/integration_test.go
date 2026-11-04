@@ -10,7 +10,7 @@ import "testing"
 //	go test -tags=integration ./internal/localops/
 
 func TestServiceStatuses_EmptySlice(t *testing.T) {
-	statuses, err := ServiceStatuses([]string{}, false)
+	statuses, err := ServiceStatuses([]string{}, false, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -20,7 +20,7 @@ func TestServiceStatuses_EmptySlice(t *testing.T) {
 }
 
 func TestServiceStatuses_NonexistentService(t *testing.T) {
-	statuses, err := ServiceStatuses([]string{"definitely-nonexistent-lanctl-test-svc"}, false)
+	statuses, err := ServiceStatuses([]string{"definitely-nonexistent-lanctl-test-svc"}, false, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestServiceStatuses_NonexistentService(t *testing.T) {
 
 // User-scope status is read-only and safe even when no user manager is running.
 func TestServiceStatuses_NonexistentUserService(t *testing.T) {
-	statuses, err := ServiceStatuses([]string{"definitely-nonexistent-lanctl-test-svc"}, true)
+	statuses, err := ServiceStatuses([]string{"definitely-nonexistent-lanctl-test-svc"}, true, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -43,13 +43,13 @@ func TestServiceStatuses_NonexistentUserService(t *testing.T) {
 }
 
 func TestJournalLines_NonexistentService(t *testing.T) {
-	_, _ = JournalLines("definitely-nonexistent-lanctl-test-svc", 10, false)
+	_, _ = JournalLines("definitely-nonexistent-lanctl-test-svc", 10, false, "")
 }
 
 func TestJournalLines_NonexistentUserService(t *testing.T) {
-	_, _ = JournalLines("definitely-nonexistent-lanctl-test-svc", 10, true)
+	_, _ = JournalLines("definitely-nonexistent-lanctl-test-svc", 10, true, "")
 }
 
 func TestServiceControl_NonexistentService(t *testing.T) {
-	_ = ServiceControl("definitely-nonexistent-lanctl-test-svc", "stop", false)
+	_ = ServiceControl("definitely-nonexistent-lanctl-test-svc", "stop", false, "")
 }
