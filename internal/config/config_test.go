@@ -448,14 +448,118 @@ hosts:
 	}
 }
 
-func TestLoadFile_HubspacePlug(t *testing.T) {
+func TestLoadFile_Plugs(t *testing.T) {
+	t.Setenv("HUBSPACE_USERNAME", "")
+	t.Setenv("HUBSPACE_PASSWORD", "")
+	path := writeConfig(t, `
+config_version: 3
+hubspace:
+  username: yaml-user
+  password: yaml-pass
+plugs:
+  - name: tv
+    provider: hubspace
+    device_name: tv-plug
+    power_off_seconds: 5
+  - name: rack
+    device_name: rack-plug
+    affects: [nas, desktop]
+hosts:
+  - name: nas
+    ip: 192.0.2.10
+    mac: "AA:BB:CC:DD:EE:FF"
+  - name: desktop
+    ip: 192.0.2.11
+    mac: "11:22:33:44:55:66"`)
+
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error: %v", err)
+	}
+	if cfg.ConfigVersion != 3 {
+		t.Errorf("ConfigVersion = %d, want 3", cfg.ConfigVersion)
+	}
+	user, pass := cfg.HubspaceCredentials()
+	if user != "yaml-user" || pass != "yaml-pass" {
+		t.Errorf("credentials = %q/%q, want yaml-user/yaml-pass", user, pass)
+	}
+	if len(cfg.Plugs) != 2 {
+		t.Fatalf("Plugs len = %d, want 2", len(cfg.Plugs))
+	}
+	tv := cfg.Plugs[0]
+	if tv.Name != "tv" || tv.Provider != PlugProviderHubspace || tv.DeviceName != "tv-plug" {
+		t.Errorf("unexpected tv plug: %+v", tv)
+	}
+	if len(tv.Affects) != 0 {
+		t.Errorf("tv.Affects = %v, want empty", tv.Affects)
+	}
+	if got := tv.OffDuration(); got != 5*time.Second {
+		t.Errorf("tv.OffDuration = %s, want 5s", got)
+	}
+	rack := cfg.Plugs[1]
+	if rack.Name != "rack" || rack.Provider != PlugProviderHubspace {
+		t.Errorf("unexpected rack plug: %+v", rack)
+	}
+	if len(rack.Affects) != 2 || rack.Affects[0] != "nas" || rack.Affects[1] != "desktop" {
+		t.Errorf("rack.Affects = %v, want [nas desktop]", rack.Affects)
+	}
+	if got := rack.OffDuration(); got != 30*time.Second {
+		t.Errorf("rack.OffDuration = %s, want default 30s", got)
+	}
+	if !cfg.HasPlugs() {
+		t.Error("HasPlugs() = false, want true")
+	}
+	if got := cfg.PlugNames(); len(got) != 2 || got[0] != "tv" || got[1] != "rack" {
+		t.Errorf("PlugNames() = %v, want [tv rack]", got)
+	}
+	if p, ok := cfg.PlugByName("rack"); !ok || p.Name != "rack" {
+		t.Errorf("PlugByName(rack) = %+v, %v", p, ok)
+	}
+	if _, ok := cfg.PlugByName("missing"); ok {
+		t.Error("PlugByName(missing) found a plug")
+	}
+	if got := cfg.PlugsForHost("nas"); len(got) != 1 || got[0].Name != "rack" {
+		t.Errorf("PlugsForHost(nas) = %+v, want rack", got)
+	}
+	if got := cfg.PlugsForHost("tv"); len(got) != 0 {
+		t.Errorf("PlugsForHost(tv) = %+v, want none", got)
+	}
+}
+
+func TestLoadFile_MultiplePlugsPerHost(t *testing.T) {
+	t.Setenv("HUBSPACE_USERNAME", "")
+	t.Setenv("HUBSPACE_PASSWORD", "")
+	path := writeConfig(t, `
+plugs:
+  - name: rack
+    device_name: rack-plug
+    affects: [nas, desktop]
+  - name: desk
+    device_name: desk-plug
+    affects: [desktop]
+hosts:
+  - name: nas
+    ip: 192.0.2.10
+    mac: "AA:BB:CC:DD:EE:FF"
+  - name: desktop
+    ip: 192.0.2.11
+    mac: "11:22:33:44:55:66"`)
+
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile() error: %v", err)
+	}
+	got := cfg.PlugsForHost("desktop")
+	if len(got) != 2 || got[0].Name != "rack" || got[1].Name != "desk" {
+		t.Errorf("desktop plugs = %+v, want rack and desk", got)
+	}
+}
+
+func TestLoadFile_LegacyHostPlugConverts(t *testing.T) {
 	t.Setenv("HUBSPACE_USERNAME", "")
 	t.Setenv("HUBSPACE_PASSWORD", "")
 	path := writeConfig(t, `
 config_version: 2
-hubspace:
-  username: yaml-user
-  password: yaml-pass
 hosts:
   - name: nas
     ip: 192.0.2.10
@@ -471,28 +575,41 @@ hosts:
 	if cfg.ConfigVersion != 2 {
 		t.Errorf("ConfigVersion = %d, want 2", cfg.ConfigVersion)
 	}
-	user, pass := cfg.HubspaceCredentials()
-	if user != "yaml-user" || pass != "yaml-pass" {
-		t.Errorf("credentials = %q/%q, want yaml-user/yaml-pass", user, pass)
+	if cfg.Hosts[0].Plug != nil {
+		t.Error("legacy Host.Plug was not cleared")
 	}
-	p := cfg.Hosts[0].Plug
-	if p == nil {
-		t.Fatal("Plug is nil")
+	if len(cfg.Plugs) != 1 {
+		t.Fatalf("Plugs len = %d, want 1", len(cfg.Plugs))
 	}
-	if p.Provider != PlugProviderHubspace {
-		t.Errorf("Provider = %q, want %q", p.Provider, PlugProviderHubspace)
+	p := cfg.Plugs[0]
+	if p.Name != "nas" || p.DeviceName != "nas-plug" || p.Provider != PlugProviderHubspace {
+		t.Errorf("converted plug = %+v", p)
 	}
-	if p.DeviceName != "nas-plug" {
-		t.Errorf("DeviceName = %q, want nas-plug", p.DeviceName)
+	if len(p.Affects) != 1 || p.Affects[0] != "nas" {
+		t.Errorf("converted Affects = %v, want [nas]", p.Affects)
 	}
 	if got := p.OffDuration(); got != 45*time.Second {
-		t.Errorf("OffDuration = %s, want 45s", got)
+		t.Errorf("converted OffDuration = %s, want 45s", got)
 	}
-	if !cfg.HasPlugs() {
-		t.Error("HasPlugs() = false, want true")
-	}
-	if got := cfg.PlugHosts(); len(got) != 1 || got[0] != "nas" {
-		t.Errorf("PlugHosts() = %v, want [nas]", got)
+}
+
+func TestLoadFile_LegacyAndTopLevelPlugNameCollision(t *testing.T) {
+	t.Setenv("HUBSPACE_USERNAME", "")
+	t.Setenv("HUBSPACE_PASSWORD", "")
+	path := writeConfig(t, `
+config_version: 3
+plugs:
+  - name: nas
+    device_name: top-level
+hosts:
+  - name: nas
+    ip: 192.0.2.10
+    mac: "AA:BB:CC:DD:EE:FF"
+    plug:
+      device_name: legacy`)
+	_, err := LoadFile(path)
+	if err == nil || !strings.Contains(err.Error(), "duplicate plug name") {
+		t.Errorf("collision error = %v, want duplicate plug name", err)
 	}
 }
 
@@ -500,18 +617,19 @@ func TestLoadFile_PlugDefaults(t *testing.T) {
 	t.Setenv("HUBSPACE_USERNAME", "")
 	t.Setenv("HUBSPACE_PASSWORD", "")
 	path := writeConfig(t, `
+plugs:
+  - name: nas
+    device_id: "00000000-0000-0000-0000-000000000000"
 hosts:
   - name: nas
     ip: 192.0.2.10
-    mac: "AA:BB:CC:DD:EE:FF"
-    plug:
-      device_id: "00000000-0000-0000-0000-000000000000"`)
+    mac: "AA:BB:CC:DD:EE:FF"`)
 
 	cfg, err := LoadFile(path)
 	if err != nil {
 		t.Fatalf("LoadFile() error: %v", err)
 	}
-	p := cfg.Hosts[0].Plug
+	p := cfg.Plugs[0]
 	if p.Provider != PlugProviderHubspace {
 		t.Errorf("Provider = %q, want default %q", p.Provider, PlugProviderHubspace)
 	}
@@ -591,8 +709,8 @@ func TestConfigHelpers(t *testing.T) {
 	if cfg.HasPlugs() {
 		t.Error("empty config HasPlugs() = true")
 	}
-	if got := cfg.PlugHosts(); len(got) != 0 {
-		t.Errorf("empty config PlugHosts() = %v", got)
+	if got := cfg.PlugNames(); len(got) != 0 {
+		t.Errorf("empty config PlugNames() = %v", got)
 	}
 	if got := (Plug{}).OffDuration(); got != 30*time.Second {
 		t.Errorf("zero Plug.OffDuration() = %s, want 30s", got)
@@ -600,55 +718,98 @@ func TestConfigHelpers(t *testing.T) {
 	if got := (Plug{PowerOffSeconds: 5}).OffDuration(); got != 5*time.Second {
 		t.Errorf("Plug.OffDuration() = %s, want 5s", got)
 	}
+
+	cfg = Config{Plugs: []Plug{{Name: "tv"}}}
+	if !cfg.HasPlugs() {
+		t.Error("config with a plug HasPlugs() = false")
+	}
+	if got := cfg.PlugNames(); len(got) != 1 || got[0] != "tv" {
+		t.Errorf("PlugNames() = %v, want [tv]", got)
+	}
+	if p, ok := cfg.PlugByName("tv"); !ok || p.Name != "tv" {
+		t.Errorf("PlugByName(tv) = %+v, %v", p, ok)
+	}
+	if _, ok := cfg.PlugByName("nas"); ok {
+		t.Error("PlugByName(nas) found a plug")
+	}
+	if got := cfg.PlugsForHost("nas"); len(got) != 0 {
+		t.Errorf("PlugsForHost(nas) = %+v, want none", got)
+	}
+	cfg.Plugs[0].Affects = []string{"nas"}
+	if got := cfg.PlugsForHost("nas"); len(got) != 1 || got[0].Name != "tv" {
+		t.Errorf("PlugsForHost(nas) = %+v, want tv", got)
+	}
 }
 
 func TestLoadFile_PlugValidation(t *testing.T) {
 	t.Setenv("HUBSPACE_USERNAME", "")
 	t.Setenv("HUBSPACE_PASSWORD", "")
 	tests := []struct {
-		name string
-		plug string
-		want string
+		name  string
+		plugs string
+		want  string
 	}{
 		{
-			name: "unsupported provider",
-			plug: "      provider: other\n      device_name: plug",
-			want: "unsupported plug provider",
+			name:  "missing name",
+			plugs: "  - provider: hubspace\n    device_name: plug\n",
+			want:  "name is required",
 		},
 		{
-			name: "missing device",
-			plug: "      provider: hubspace",
-			want: "needs device_id or device_name",
+			name:  "duplicate name",
+			plugs: "  - name: tv\n    device_name: one\n  - name: tv\n    device_name: two\n",
+			want:  "duplicate plug name",
 		},
 		{
-			name: "negative delay",
-			plug: "      device_name: plug\n      power_off_seconds: -1",
-			want: "power_off_seconds",
+			name:  "unsupported provider",
+			plugs: "  - name: tv\n    provider: other\n    device_name: plug\n",
+			want:  "unsupported provider",
 		},
 		{
-			name: "too long delay",
-			plug: "      device_name: plug\n      power_off_seconds: 601",
-			want: "power_off_seconds",
+			name:  "missing device",
+			plugs: "  - name: tv\n    provider: hubspace\n",
+			want:  "needs device_id or device_name",
+		},
+		{
+			name:  "negative delay",
+			plugs: "  - name: tv\n    device_name: plug\n    power_off_seconds: -1\n",
+			want:  "power_off_seconds",
+		},
+		{
+			name:  "too long delay",
+			plugs: "  - name: tv\n    device_name: plug\n    power_off_seconds: 601\n",
+			want:  "power_off_seconds",
+		},
+		{
+			name:  "unknown affect",
+			plugs: "  - name: tv\n    device_name: plug\n    affects: [ghost]\n",
+			want:  "unknown host",
+		},
+		{
+			name:  "duplicate affect",
+			plugs: "  - name: tv\n    device_name: plug\n    affects: [nas, nas]\n",
+			want:  "more than once",
+		},
+		{
+			name:  "empty affect",
+			plugs: "  - name: tv\n    device_name: plug\n    affects: [\"\"]\n",
+			want:  "empty host name",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := writeConfig(t, `
-hosts:
+plugs:
+`+tt.plugs+`hosts:
   - name: nas
     ip: 192.0.2.10
     mac: "AA:BB:CC:DD:EE:FF"
-    plug:
-`+tt.plug+"\n")
+`)
 			_, err := LoadFile(path)
 			if err == nil {
 				t.Fatal("expected validation error, got nil")
 			}
 			if !strings.Contains(err.Error(), tt.want) {
 				t.Errorf("error %q should contain %q", err, tt.want)
-			}
-			if !strings.Contains(err.Error(), "nas") {
-				t.Errorf("error %q should name the host", err)
 			}
 		})
 	}

@@ -177,9 +177,9 @@ Commands:
   service HOST[/VM] SERVICE ACTION     start|stop|restart a service
   logs HOST[/VM] SERVICE [-n N] [-f]   show or follow journal lines
   vpn-repair HOST[/VM]                 run NordVPN repair
-  plugs                                list configured smart plugs
-  plug status HOST                     show a plug's state
-  plug on|off|cycle HOST               control a smart plug
+  plugs [--host HOST]                  list configured smart plugs
+  plug status NAME                     show a plug's state
+  plug on|off|cycle NAME               control a smart plug
   hubspace devices                     list Hubspace power outlets
   version                              print the server version
   help                                 show this help

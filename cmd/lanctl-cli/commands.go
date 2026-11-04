@@ -17,13 +17,14 @@ var validPlugActions = map[string]bool{"status": true, "on": true, "off": true, 
 
 // actionResult is the JSON shape printed by mutating commands with -o json.
 type actionResult struct {
-	Action  string `json:"action"`
-	Host    string `json:"host"`
-	VM      string `json:"vm,omitempty"`
-	Service string `json:"service,omitempty"`
-	Plug    string `json:"plug,omitempty"`
-	On      *bool  `json:"on,omitempty"`
-	Status  string `json:"status,omitempty"`
+	Action  string   `json:"action"`
+	Host    string   `json:"host,omitempty"`
+	VM      string   `json:"vm,omitempty"`
+	Service string   `json:"service,omitempty"`
+	Plug    string   `json:"plug,omitempty"`
+	Affects []string `json:"affects,omitempty"`
+	On      *bool    `json:"on,omitempty"`
+	Status  string   `json:"status,omitempty"`
 }
 
 func newFlagSet(name string, o *options) *flag.FlagSet {
@@ -208,6 +209,7 @@ func cmdVPNRepair(ctx context.Context, o *options, c *client.Client, args []stri
 
 func cmdPlugs(ctx context.Context, o *options, c *client.Client, args []string) int {
 	fs := newFlagSet("plugs", o)
+	host := fs.String("host", "", "only plugs that affect this host")
 	rest, err := parseFlags(fs, args)
 	if err != nil {
 		return usageError(o, err)
@@ -219,6 +221,18 @@ func cmdPlugs(ctx context.Context, o *options, c *client.Client, args []string) 
 	plugs, err := c.Plugs(ctx)
 	if err != nil {
 		return fail(o, err)
+	}
+	if *host != "" {
+		filtered := make([]client.Plug, 0, len(plugs))
+		for _, p := range plugs {
+			for _, name := range p.Affects {
+				if name == *host {
+					filtered = append(filtered, p)
+					break
+				}
+			}
+		}
+		plugs = filtered
 	}
 	if err := renderPlugs(o.stdout, plugs, o.output, o.color()); err != nil {
 		return fail(o, err)
@@ -233,17 +247,17 @@ func cmdPlug(ctx context.Context, o *options, c *client.Client, args []string) i
 		return usageError(o, err)
 	}
 	if len(rest) != 2 {
-		fmt.Fprintln(o.stderr, "lanctl-cli: usage: plug status|on|off|cycle HOST")
+		fmt.Fprintln(o.stderr, "lanctl-cli: usage: plug status|on|off|cycle NAME")
 		return exitUsage
 	}
-	action, host := rest[0], rest[1]
+	action, name := rest[0], rest[1]
 	if !validPlugActions[action] {
 		fmt.Fprintf(o.stderr, "lanctl-cli: invalid plug action %q (want status, on, off, or cycle)\n", action)
 		return exitUsage
 	}
 
 	if action == "status" {
-		plug, err := c.PlugStatus(ctx, host)
+		plug, err := c.PlugStatus(ctx, name)
 		if err != nil {
 			return fail(o, err)
 		}
@@ -253,16 +267,50 @@ func cmdPlug(ctx context.Context, o *options, c *client.Client, args []string) i
 			}
 			return exitOK
 		}
-		fmt.Fprintf(o.stdout, "%s: %s is %s\n", plug.Host, plugLabel(plug.DeviceName, plug.DeviceID), stateLabel(plug.On))
+		line := fmt.Sprintf("%s: %s is %s", plug.Name, plugLabel(plug.DeviceName, plug.DeviceID), stateLabel(plug.On))
+		if len(plug.Affects) > 0 {
+			line += " (affects: " + strings.Join(plug.Affects, ", ") + ")"
+		}
+		fmt.Fprintln(o.stdout, line)
 		return exitOK
 	}
 
-	if action == "off" || action == "cycle" {
-		prompt := "Turn off the plug for " + host + "? This cuts power immediately."
-		if action == "cycle" {
-			prompt = "Power-cycle " + host + "? This cuts power immediately and turns it back on."
+	// Fetch status first so confirmations can name the affected hosts.
+	plug, err := c.PlugStatus(ctx, name)
+	if err != nil {
+		return fail(o, err)
+	}
+	affectsWarning := ""
+	if len(plug.Affects) > 0 {
+		affectsWarning = " This will affect hosts: " + strings.Join(plug.Affects, ", ") + ", which depend on this plug."
+	}
+	switch action {
+	case "on":
+		if len(plug.Affects) > 0 {
+			ok, err := confirm(o, "Turn on plug "+name+"?"+affectsWarning)
+			if err != nil {
+				return fail(o, err)
+			}
+			if !ok {
+				if !o.quiet {
+					fmt.Fprintln(o.stderr, "aborted")
+				}
+				return exitOK
+			}
 		}
-		ok, err := confirm(o, prompt)
+	case "off":
+		ok, err := confirm(o, "Turn off plug "+name+"? This cuts power immediately."+affectsWarning)
+		if err != nil {
+			return fail(o, err)
+		}
+		if !ok {
+			if !o.quiet {
+				fmt.Fprintln(o.stderr, "aborted")
+			}
+			return exitOK
+		}
+	case "cycle":
+		ok, err := confirm(o, "Power-cycle plug "+name+"? This cuts power immediately and turns it back on."+affectsWarning)
 		if err != nil {
 			return fail(o, err)
 		}
@@ -279,13 +327,13 @@ func cmdPlug(ctx context.Context, o *options, c *client.Client, args []string) i
 		// timeout is too short. A user-supplied longer timeout still wins.
 		c = client.New(o.server, client.WithTimeout(cycleTimeout(o.timeout)))
 	}
-	res, err := c.PlugControl(ctx, host, action)
+	res, err := c.PlugControl(ctx, name, action)
 	if err != nil {
 		return fail(o, err)
 	}
 	on := res.On
-	return report(o, actionResult{Action: action, Host: host, Plug: res.Plug, On: &on, Status: res.Status},
-		fmt.Sprintf("%s: %s", host, res.Status))
+	return report(o, actionResult{Action: action, Plug: res.Plug, Affects: res.Affects, On: &on, Status: res.Status},
+		fmt.Sprintf("%s: %s", name, res.Status))
 }
 
 func cmdHubspace(ctx context.Context, o *options, c *client.Client, args []string) int {

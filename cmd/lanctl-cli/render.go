@@ -35,7 +35,7 @@ func renderHosts(w io.Writer, hosts []client.Host, format string, color bool) er
 }
 
 func renderHostsTable(w io.Writer, hosts []client.Host, color bool) {
-	headers := []string{"NAME", "TYPE", "IP", "ONLINE", "SERVICES", "VPN"}
+	headers := []string{"NAME", "TYPE", "IP", "ONLINE", "SERVICES", "VPN", "PLUGS"}
 	var rows [][]string
 	var online []bool
 	for _, h := range hosts {
@@ -63,6 +63,7 @@ func renderHostsPlain(w io.Writer, hosts []client.Host) {
 					onlineLabel(vm.Online),
 					formatServices(vm.Services, vm.UserServices, vm.ServiceStatuses),
 					formatVPN(vm.VPNHostname, vm.VPNReachable),
+					"-",
 				}
 				fmt.Fprintln(w, strings.Join(row, "\t"))
 			}
@@ -78,6 +79,7 @@ func hostRow(h client.Host) []string {
 		onlineLabel(h.Online),
 		formatServices(h.Services, h.UserServices, h.ServiceStatuses),
 		formatVPN(h.VPNHostname, h.VPNReachable),
+		formatPlugNames(h.Plugs),
 	}
 }
 
@@ -89,6 +91,7 @@ func vmRow(vm client.VM) []string {
 		onlineLabel(vm.Online),
 		formatServices(vm.Services, vm.UserServices, vm.ServiceStatuses),
 		formatVPN(vm.VPNHostname, vm.VPNReachable),
+		"-",
 	}
 }
 
@@ -198,28 +201,31 @@ func renderPlugs(w io.Writer, plugs []client.Plug, format string, color bool) er
 		return writeJSON(w, plugs)
 	case "plain":
 		for _, p := range plugs {
-			fmt.Fprintf(w, "%s\t%s\t%s\n", p.Host, plugLabel(p.DeviceName, p.DeviceID), stateLabel(p.On))
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", p.Name, plugLabel(p.DeviceName, p.DeviceID), formatAffects(p.Affects), stateLabel(p.On))
 		}
 		return nil
 	default:
-		headers := []string{"HOST", "PLUG", "STATE"}
-		widths := []int{len(headers[0]), len(headers[1])}
+		headers := []string{"NAME", "DEVICE", "AFFECTS", "STATE"}
+		widths := []int{len(headers[0]), len(headers[1]), len(headers[2])}
 		for _, p := range plugs {
-			if len(p.Host) > widths[0] {
-				widths[0] = len(p.Host)
+			if len(p.Name) > widths[0] {
+				widths[0] = len(p.Name)
 			}
 			if label := plugLabel(p.DeviceName, p.DeviceID); len(label) > widths[1] {
 				widths[1] = len(label)
 			}
+			if affects := formatAffects(p.Affects); len(affects) > widths[2] {
+				widths[2] = len(affects)
+			}
 		}
-		fmt.Fprintf(w, "%s  %s  %s\n", pad(headers[0], widths[0]), pad(headers[1], widths[1]), headers[2])
+		fmt.Fprintf(w, "%s  %s  %s  %s\n", pad(headers[0], widths[0]), pad(headers[1], widths[1]), pad(headers[2], widths[2]), headers[3])
 		for _, p := range plugs {
 			label := plugLabel(p.DeviceName, p.DeviceID)
 			state := stateLabel(p.On)
 			if color {
 				state = colorize(p.On, state)
 			}
-			fmt.Fprintf(w, "%s  %s  %s\n", pad(p.Host, widths[0]), pad(label, widths[1]), state)
+			fmt.Fprintf(w, "%s  %s  %s  %s\n", pad(p.Name, widths[0]), pad(label, widths[1]), pad(formatAffects(p.Affects), widths[2]), state)
 		}
 		return nil
 	}
@@ -271,6 +277,24 @@ func stateLabel(on bool) string {
 		return "on"
 	}
 	return "off"
+}
+
+func formatAffects(affects []string) string {
+	if len(affects) == 0 {
+		return "-"
+	}
+	return strings.Join(affects, ",")
+}
+
+func formatPlugNames(plugs []client.PlugInfo) string {
+	if len(plugs) == 0 {
+		return "-"
+	}
+	names := make([]string, len(plugs))
+	for i, p := range plugs {
+		names[i] = p.Name
+	}
+	return strings.Join(names, ",")
 }
 
 func formatVPN(hostname *string, reachable *bool) string {

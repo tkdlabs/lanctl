@@ -1,8 +1,9 @@
 # lanctl
 
 Minimal LAN host manager. A single Go binary with an embedded-friendly web UI that
-lets you wake, shut down, and monitor hosts and Proxmox VMs, tail systemd service
-logs, and repair NordVPN meshnet connectivity — from your browser.
+lets you wake, shut down, and monitor hosts and Proxmox VMs, control Hubspace
+smart plugs, tail systemd service logs, and repair NordVPN meshnet connectivity —
+from your browser.
 
 - **Zero runtime dependencies** — one static binary, no Python, no venv, no Node.
 - **Web UI + REST API** on a single port (default `8003`).
@@ -91,15 +92,27 @@ See `hosts.example.yaml` for the full annotated schema.
 
 ### Smart plugs (Hubspace / Home Depot)
 
-Phase 1 supports manual power control for Hubspace power outlets. Attach a plug
-to a host and configure the account once:
+Phase 1 supports manual power control for Hubspace power outlets. Plugs are
+first-class: a plug may power no managed host (for example a TV), one host, or
+several hosts.
 
 ```yaml
-config_version: 2
+config_version: 3
 
 hubspace:
   username: user@example.com
   password: "..."
+
+plugs:
+  - name: tv                    # local lanctl name
+    provider: hubspace          # optional; defaults to hubspace
+    device_name: "Living Room TV"
+    power_off_seconds: 5
+
+  - name: nas
+    device_name: "NAS plug"     # or a stable device_id
+    power_off_seconds: 30
+    affects: [nas]              # optional host dependencies
 
 hosts:
   - name: nas
@@ -107,18 +120,22 @@ hosts:
     ip: 192.0.2.10
     mac: "AA:BB:CC:DD:EE:FF"
     ssh_user: admin
-    plug:
-      provider: hubspace        # optional; defaults to hubspace
-      device_name: "nas-plug"   # or a stable device_id
-      power_off_seconds: 30     # off delay for a power cycle
 ```
+
+`affects` is display/safety metadata: it names the hosts that depend on the
+plug. It does not make `shutdown` or `wake` touch the plug automatically. A
+plug may affect several hosts (`affects: [nas, desktop]`), and a host may have
+several plugs.
 
 `HUBSPACE_USERNAME` and `HUBSPACE_PASSWORD` override the YAML values. The
 Hubspace API is unofficial and cloud-based; the plug needs internet access.
-`cycle` is a hard power cut, not a graceful reboot, and is separate from the
-normal `shutdown` action. The native host watchdog is not part of this feature.
-`lanctl-cli plug cycle` waits for the turn-on and allows at least two minutes;
-raise `--timeout` if `power_off_seconds` is longer.
+`cycle` is a hard power cut, not a graceful reboot. On/Off/Cycle confirmations
+name the affected hosts; `cycle` always confirms. The native host watchdog is
+not part of this feature. `lanctl-cli plug cycle` waits for the turn-on and
+allows at least two minutes; raise `--timeout` if `power_off_seconds` is longer.
+
+Legacy v2 configs with `hosts[].plug` still load: they are converted to a plug
+named after the host with `affects: [host]`.
 
 ## Install as a service
 
@@ -263,16 +280,16 @@ each run allowlists the remote in the service user's gitconfig.
 |--------|------|-------------|
 | GET | `/api/version` | Build version |
 | GET | `/api/notices` | Self-diagnostics: config health and sync freshness |
-| GET | `/api/hosts` | List hosts with online/service/VPN status |
+| GET | `/api/hosts` | List hosts with online/service/VPN status and associated plugs |
 | POST | `/api/hosts/{name}/wake` | Send Wake-on-LAN magic packet |
 | POST | `/api/hosts/{name}/shutdown` | Shut down host (local or SSH) |
 | GET | `/api/hosts/{name}/services/{svc}/logs` | Last N journal lines |
 | GET | `/api/hosts/{name}/services/{svc}/logs/stream` | SSE journal follow |
 | POST | `/api/hosts/{name}/services/{svc}/{action}` | `start` / `stop` / `restart` |
 | POST | `/api/hosts/{name}/vpn-repair` | NordVPN repair stream (SSE) |
-| GET | `/api/plugs` | Configured smart plugs and state |
-| GET | `/api/hosts/{name}/plug` | One host's smart-plug state |
-| POST | `/api/hosts/{name}/plug/{on\|off\|cycle}` | Control a smart plug |
+| GET | `/api/plugs` | All configured smart plugs and state |
+| GET | `/api/plugs/{name}` | One smart plug's state |
+| POST | `/api/plugs/{name}/{on\|off\|cycle}` | Control a smart plug |
 | GET | `/api/hubspace/devices` | Discover Hubspace power outlets |
 | POST | `/api/hosts/{name}/vms/{vm}/shutdown` | Shut down Proxmox VM |
 | POST | `/api/hosts/{name}/vms/{vm}/vpn-repair` | VM NordVPN repair stream |
@@ -296,17 +313,19 @@ lanctl-cli logs desktop lanctl.service -f        # follow (SSE)
 lanctl-cli logs desktop lanctl.service -n 200    # last 200 lines
 lanctl-cli vpn-repair desktop
 lanctl-cli plugs
-lanctl-cli plug status nas
-lanctl-cli plug on nas
-lanctl-cli plug off nas -y
+lanctl-cli plugs --host nas
+lanctl-cli plug status tv
+lanctl-cli plug on tv
+lanctl-cli plug off tv -y
 lanctl-cli plug cycle nas -y
 lanctl-cli hubspace devices
 lanctl-cli version
 ```
 
-Targets are `HOST` or `HOST/VM`. The server address comes from `--server`/
-`-s`, then `LANCTL_URL`, defaulting to `http://localhost:8003`. A scheme is
-optional, so `LANCTL_URL=rpi.local:8004` implies `http://`:
+Host targets are `HOST` or `HOST/VM`; plug commands take a plug `NAME`. The
+server address comes from `--server`/`-s`, then `LANCTL_URL`, defaulting to
+`http://localhost:8003`. A scheme is optional, so `LANCTL_URL=rpi.local:8004`
+implies `http://`:
 
 ```bash
 export LANCTL_URL=rpi.local:8004   # e.g. add to ~/.bashrc
@@ -316,8 +335,8 @@ lanctl-cli hosts
 Global flags: `-o/--output table|json|plain`, `--timeout`, `-q/--quiet`,
 `--no-color`, `-y/--yes`. Exit codes: `0` success, `1` error, `2` usage.
 `shutdown`, `plug off`, and `plug cycle` prompt for confirmation unless
-`--yes` or JSON output is used; when stdin is not a terminal they refuse
-without `--yes`.
+`--yes` or JSON output is used; `plug on` also prompts when the plug lists
+affected hosts. When stdin is not a terminal they refuse without `--yes`.
 
 ## Security
 
@@ -333,7 +352,7 @@ shutdown) on the machines it manages.
   `InsecureIgnoreHostKey` to match a trust-on-first-use LAN workflow. Treat
   `hosts.yaml` as sensitive and keep it mode `0600`.
 - Hubspace credentials can control every device on that account, not just the
-  configured plug. Keep them in the mode-`0600` config or EnvironmentFile, and
+  configured plugs. Keep them in the mode-`0600` config or EnvironmentFile, and
   prefer a dedicated account if practical. The Hubspace API is unofficial and
   can change without notice.
 

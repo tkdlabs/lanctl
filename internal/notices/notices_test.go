@@ -167,13 +167,14 @@ func TestVPNTokenFromEnv(t *testing.T) {
 }
 
 func TestMissingHubspaceCredentials(t *testing.T) {
-	setup(t, `hosts:
+	setup(t, `plugs:
+  - name: tv
+    device_name: tv-plug
+hosts:
   - name: box
     ip: 192.0.2.10
     mac: "aa:bb:cc:dd:ee:01"
     local: true
-    plug:
-      device_name: box-plug
 `)
 	rep := Build("dev", time.Now())
 	n, ok := noticeByCode(rep, "missing_hubspace_credentials")
@@ -183,19 +184,20 @@ func TestMissingHubspaceCredentials(t *testing.T) {
 	if n.Level != LevelWarning {
 		t.Errorf("level = %q, want warning", n.Level)
 	}
-	if !strings.Contains(n.Message, "box") {
-		t.Errorf("message %q should name the host", n.Message)
+	if !strings.Contains(n.Message, "tv") {
+		t.Errorf("message %q should name the plug", n.Message)
 	}
 }
 
 func TestHubspaceCredentialsFromEnv(t *testing.T) {
-	setup(t, `hosts:
+	setup(t, `plugs:
+  - name: tv
+    device_name: tv-plug
+hosts:
   - name: box
     ip: 192.0.2.10
     mac: "aa:bb:cc:dd:ee:01"
     local: true
-    plug:
-      device_name: box-plug
 `)
 	t.Setenv("HUBSPACE_USERNAME", "user@example.com")
 	t.Setenv("HUBSPACE_PASSWORD", "secret")

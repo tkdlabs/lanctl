@@ -23,6 +23,14 @@
       margin-bottom: 1.5rem;
     }
 
+    h2.section-title {
+      font-size: 1.05rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      color: #94a3b8;
+      margin: 2rem 0 0.75rem;
+    }
+
     h1 .version {
       font-size: 0.75rem;
       font-weight: 500;
@@ -279,6 +287,20 @@
     </thead>
     <tbody id="host-table"></tbody>
   </table>
+
+  <h2 class="section-title" id="plugs-title" style="display:none">Smart plugs</h2>
+  <table id="plugs-table" style="display:none">
+    <thead>
+      <tr>
+        <th>Plug</th>
+        <th>Device</th>
+        <th>Affects</th>
+        <th>State</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="plug-table"></tbody>
+  </table>
   <div class="toast" id="toast"></div>
 
   <script>
@@ -287,6 +309,7 @@
     let pollTimer = null;
     let plugTimer = null;
     let plugStates = {};
+    let plugList = [];
     let lastHosts = [];
 
     function esc(str) {
@@ -324,8 +347,10 @@
       try {
         const plugs = await fetchJSON('/api/plugs');
         const next = {};
-        for (const p of plugs) next[p.host] = p;
+        for (const p of plugs) next[p.name] = p;
         plugStates = next;
+        plugList = plugs;
+        renderPlugs();
         if (lastHosts.length) renderHosts(lastHosts);
       } catch (err) {
         console.warn('plug state unavailable:', err.message);
@@ -432,25 +457,13 @@
 
         const typeBadge = isProxmox ? '<span class="proxmox-badge">proxmox</span>' : '';
 
-        const livePlug = h.plug ? plugStates[h.name] : null;
-        const plugName = h.plug
-          ? ((livePlug && (livePlug.device_name || livePlug.device_id)) ||
-             h.plug.device_name || h.plug.device_id || 'plug')
-          : '';
-        const plugOn = livePlug ? livePlug.on : null;
-        const plugStateLabel = plugOn === null ? 'unknown' : (plugOn ? 'on' : 'off');
-        const plugClass = plugOn === null ? 'plug-unknown' : (plugOn ? 'plug-on' : 'plug-off');
-        const plugDot = plugOn === null ? 'offline' : (plugOn ? 'online' : 'offline');
-        const plugHtml = h.plug
-          ? `<div class="plug-badge ${plugClass}"><span class="dot ${plugDot}"></span>Plug ${esc(plugName)} · ${plugStateLabel}</div>`
-          : '';
-        const plugBtns = h.plug
-          ? `<button class="btn-plug" data-name="${esc(h.name)}" data-plug-action="on"
-               ${plugOn === true ? 'disabled title="Already on"' : ''}>On</button>
-             <button class="btn-plug" data-name="${esc(h.name)}" data-plug-action="off"
-               ${plugOn === false ? 'disabled title="Already off"' : ''}>Off</button>
-             <button class="btn-plug" data-name="${esc(h.name)}" data-plug-action="cycle">Cycle</button>`
-          : '';
+        const plugBadges = (h.plugs || []).map(p => {
+          const live = plugStates[p.name];
+          const state = live ? (live.on ? 'on' : 'off') : 'unknown';
+          const cls = live ? (live.on ? 'plug-on' : 'plug-off') : 'plug-unknown';
+          const dot = live ? (live.on ? 'online' : 'offline') : 'offline';
+          return `<div class="plug-badge ${cls}"><span class="dot ${dot}"></span>Plug ${esc(p.name)} · ${state}</div>`;
+        }).join('');
 
         const wakeBtn = h.local ? '' :
           `<button class="btn-wake" data-name="${esc(h.name)}" data-action="wake"
@@ -473,7 +486,7 @@
             <div class="label">${esc(h.name)}${typeBadge}</div>
             <div class="meta">${esc(h.ip)} &nbsp;·&nbsp; ${esc(h.mac)}</div>
             ${vpnHtml}
-            ${plugHtml}
+            ${plugBadges}
           </td>
           <td>
             <span class="dot ${h.online ? 'online' : 'offline'}"></span>
@@ -483,7 +496,6 @@
           <td class="actions">
             ${wakeBtn}
             ${fixVpnBtn}
-            ${plugBtns}
             <button class="btn-shutdown" data-name="${esc(h.name)}" data-action="shutdown"
               data-local="${h.local || false}"
               ${!h.online ? 'disabled title="Already offline"' : ''}>Shutdown</button>
@@ -547,36 +559,76 @@
       }
     }
 
-    document.getElementById('host-table').addEventListener('click', async (e) => {
-      // Smart plug controls (on/off/cycle)
-      const plugBtn = e.target.closest('button[data-plug-action]');
-      if (plugBtn) {
-        const { name, plugAction } = plugBtn.dataset;
-        if (plugAction === 'off' || plugAction === 'cycle') {
-          const msg = plugAction === 'cycle'
-            ? `Power-cycle ${name}? This cuts power immediately and turns it back on.`
-            : `Turn off the plug for ${name}? This cuts power immediately.`;
-          if (!confirm(msg)) return;
-        }
-        const oldText = plugBtn.textContent;
-        plugBtn.disabled = true;
-        if (plugAction === 'cycle') plugBtn.textContent = 'Cycling…';
-        try {
-          const res = await fetch(`/api/hosts/${encodeURIComponent(name)}/plug/${plugAction}`, { method: 'POST' });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
-          showToast(`${name}: ${data.status}`, 'ok');
-          await fetchPlugs();
-          clearTimeout(pollTimer);
-          pollTimer = setTimeout(poll, plugAction === 'cycle' ? 5000 : 2000);
-        } catch (err) {
-          showToast(`${name}: ${err.message}`, 'err');
-          plugBtn.disabled = false;
-          plugBtn.textContent = oldText;
-        }
+    function plugDeviceLabel(p) {
+      return p.device_name || p.device_id || '-';
+    }
+
+    function renderPlugs() {
+      const title = document.getElementById('plugs-title');
+      const table = document.getElementById('plugs-table');
+      const tbody = document.getElementById('plug-table');
+      if (!plugList.length) {
+        title.style.display = 'none';
+        table.style.display = 'none';
+        tbody.innerHTML = '';
         return;
       }
+      title.style.display = '';
+      table.style.display = '';
+      tbody.innerHTML = plugList.map(p => {
+        const affects = p.affects || [];
+        const affectsText = affects.length ? affects.join(', ') : '—';
+        const state = p.on ? 'on' : 'off';
+        const dot = p.on ? 'online' : 'offline';
+        return `<tr>
+          <td><div class="label">${esc(p.name)}</div><div class="meta">${esc(p.provider || 'hubspace')}</div></td>
+          <td>${esc(plugDeviceLabel(p))}</td>
+          <td>${esc(affectsText)}</td>
+          <td><span class="dot ${dot}"></span>${state}</td>
+          <td class="actions">
+            <button class="btn-plug" data-plug-name="${esc(p.name)}" data-plug-action="on" ${p.on ? 'disabled title="Already on"' : ''}>On</button>
+            <button class="btn-plug" data-plug-name="${esc(p.name)}" data-plug-action="off" ${!p.on ? 'disabled title="Already off"' : ''}>Off</button>
+            <button class="btn-plug" data-plug-name="${esc(p.name)}" data-plug-action="cycle">Cycle</button>
+          </td>
+        </tr>`;
+      }).join('');
+    }
 
+    document.getElementById('plug-table').addEventListener('click', async (e) => {
+      const btn = e.target.closest('button[data-plug-action]');
+      if (!btn) return;
+      const { plugName, plugAction } = btn.dataset;
+      const plug = plugList.find(p => p.name === plugName);
+      const affects = (plug && plug.affects) || [];
+      const warning = affects.length
+        ? ` This will affect hosts: ${affects.join(', ')}, which depend on this plug.`
+        : '';
+      if (plugAction === 'on' && affects.length) {
+        if (!confirm(`Turn on plug ${plugName}?${warning}`)) return;
+      } else if (plugAction === 'off') {
+        if (!confirm(`Turn off plug ${plugName}? This cuts power immediately.${warning}`)) return;
+      } else if (plugAction === 'cycle') {
+        if (!confirm(`Power-cycle plug ${plugName}? This cuts power immediately and turns it back on.${warning}`)) return;
+      }
+      const oldText = btn.textContent;
+      btn.disabled = true;
+      if (plugAction === 'cycle') btn.textContent = 'Cycling…';
+      try {
+        const res = await fetch(`/api/plugs/${encodeURIComponent(plugName)}/${plugAction}`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+        showToast(`Plug ${plugName}: ${data.status}`, 'ok');
+        await fetchPlugs();
+        clearTimeout(pollTimer);
+        pollTimer = setTimeout(poll, plugAction === 'cycle' ? 5000 : 2000);
+      } catch (err) {
+        showToast(`Plug ${plugName}: ${err.message}`, 'err');
+        btn.disabled = false;
+        btn.textContent = oldText;
+      }
+    });
+
+    document.getElementById('host-table').addEventListener('click', async (e) => {
       // Service control buttons (start/stop/restart)
       const svcBtn = e.target.closest('button[data-svc-action]');
       if (svcBtn) {

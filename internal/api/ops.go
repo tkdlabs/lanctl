@@ -12,10 +12,10 @@ import (
 	"github.com/tkdlabs/lanctl/internal/sshops"
 )
 
-// plugRef identifies a configured smart plug. Host is the lanctl host name and
-// is used as the result key in HubspacePlugStates.
+// plugRef identifies a configured smart plug. Name is the local lanctl plug
+// name and is used as the result key in HubspacePlugStates.
 type plugRef struct {
-	Host       string
+	Name       string
 	DeviceID   string
 	DeviceName string
 }
@@ -120,13 +120,13 @@ func (realOperations) HubspacePlugStates(ctx context.Context, username, password
 	for _, ref := range refs {
 		device, err := hubspace.ResolveDevice(outlets, ref.DeviceID, ref.DeviceName)
 		if err != nil {
-			return nil, fmt.Errorf("host %s: %w", ref.Host, err)
+			return nil, fmt.Errorf("plug %s: %w", ref.Name, err)
 		}
 		on, err := client.State(ctx, device)
 		if err != nil {
-			return nil, fmt.Errorf("host %s: %w", ref.Host, err)
+			return nil, fmt.Errorf("plug %s: %w", ref.Name, err)
 		}
-		states[ref.Host] = on
+		states[ref.Name] = on
 	}
 	return states, nil
 }
@@ -135,10 +135,10 @@ func (realOperations) HubspaceSetPlug(ctx context.Context, username, password st
 	client := hubspace.New(username, password)
 	device, err := client.FindPowerOutlet(ctx, ref.DeviceID, ref.DeviceName)
 	if err != nil {
-		return fmt.Errorf("host %s: %w", ref.Host, err)
+		return fmt.Errorf("plug %s: %w", ref.Name, err)
 	}
 	if err := client.SetPower(ctx, device, on); err != nil {
-		return fmt.Errorf("host %s: %w", ref.Host, err)
+		return fmt.Errorf("plug %s: %w", ref.Name, err)
 	}
 	return nil
 }
@@ -147,10 +147,10 @@ func (realOperations) HubspaceCyclePlug(ctx context.Context, username, password 
 	client := hubspace.New(username, password)
 	device, err := client.FindPowerOutlet(ctx, ref.DeviceID, ref.DeviceName)
 	if err != nil {
-		return fmt.Errorf("host %s: %w", ref.Host, err)
+		return fmt.Errorf("plug %s: %w", ref.Name, err)
 	}
 	if err := client.Cycle(ctx, device, off); err != nil {
-		return fmt.Errorf("host %s: %w", ref.Host, err)
+		return fmt.Errorf("plug %s: %w", ref.Name, err)
 	}
 	return nil
 }

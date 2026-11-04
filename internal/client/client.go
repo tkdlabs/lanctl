@@ -100,28 +100,31 @@ type VM struct {
 
 // PlugInfo is the non-secret plug configuration attached to a host.
 type PlugInfo struct {
-	Provider        string `json:"provider"`
-	DeviceName      string `json:"device_name,omitempty"`
-	DeviceID        string `json:"device_id,omitempty"`
-	PowerOffSeconds int    `json:"power_off_seconds"`
+	Name            string   `json:"name"`
+	Provider        string   `json:"provider"`
+	DeviceName      string   `json:"device_name,omitempty"`
+	DeviceID        string   `json:"device_id,omitempty"`
+	PowerOffSeconds int      `json:"power_off_seconds"`
+	Affects         []string `json:"affects"`
 }
 
 // Plug is a configured smart plug and its current state.
 type Plug struct {
-	Host            string `json:"host"`
-	Provider        string `json:"provider"`
-	DeviceName      string `json:"device_name,omitempty"`
-	DeviceID        string `json:"device_id,omitempty"`
-	PowerOffSeconds int    `json:"power_off_seconds"`
-	On              bool   `json:"on"`
+	Name            string   `json:"name"`
+	Provider        string   `json:"provider"`
+	DeviceName      string   `json:"device_name,omitempty"`
+	DeviceID        string   `json:"device_id,omitempty"`
+	PowerOffSeconds int      `json:"power_off_seconds"`
+	Affects         []string `json:"affects"`
+	On              bool     `json:"on"`
 }
 
 // PlugActionResult is returned by an on/off/cycle request.
 type PlugActionResult struct {
-	Status string `json:"status"`
-	Host   string `json:"host"`
-	Plug   string `json:"plug"`
-	On     bool   `json:"on"`
+	Status  string   `json:"status"`
+	Plug    string   `json:"plug"`
+	Affects []string `json:"affects"`
+	On      bool     `json:"on"`
 }
 
 // HubspaceDevice is a controllable device discovered in the Hubspace account.
@@ -144,7 +147,7 @@ type Host struct {
 	ServiceStatuses map[string]string `json:"service_statuses"`
 	VPNHostname     *string           `json:"vpn_hostname"`
 	VPNReachable    *bool             `json:"vpn_reachable"`
-	Plug            *PlugInfo         `json:"plug,omitempty"`
+	Plugs           []PlugInfo        `json:"plugs"`
 	VMs             *[]VM             `json:"vms,omitempty"`
 }
 
@@ -227,17 +230,17 @@ func (c *Client) Plugs(ctx context.Context) ([]Plug, error) {
 	return out, nil
 }
 
-// PlugStatus returns one host's plug status.
-func (c *Client) PlugStatus(ctx context.Context, host string) (Plug, error) {
+// PlugStatus returns one plug's status.
+func (c *Client) PlugStatus(ctx context.Context, name string) (Plug, error) {
 	var out Plug
-	err := c.do(ctx, http.MethodGet, hostBase(host, "")+"/plug", nil, &out)
+	err := c.do(ctx, http.MethodGet, "/api/plugs/"+esc(name), nil, &out)
 	return out, err
 }
 
-// PlugControl runs on, off, or cycle for a host's plug.
-func (c *Client) PlugControl(ctx context.Context, host, action string) (PlugActionResult, error) {
+// PlugControl runs on, off, or cycle for a plug.
+func (c *Client) PlugControl(ctx context.Context, name, action string) (PlugActionResult, error) {
 	var out PlugActionResult
-	path := hostBase(host, "") + "/plug/" + esc(action)
+	path := "/api/plugs/" + esc(name) + "/" + esc(action)
 	err := c.do(ctx, http.MethodPost, path, nil, &out)
 	return out, err
 }

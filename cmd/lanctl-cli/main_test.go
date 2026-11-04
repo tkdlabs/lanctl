@@ -18,10 +18,12 @@ import (
 const hostsJSON = `[
   {"name":"desktop","ip":"192.168.0.100","mac":"AA:BB:CC:DD:EE:FF","online":true,
    "local":false,"services":["nginx"],"service_statuses":{"nginx":"active"},
-   "vpn_hostname":null,"vpn_reachable":null},
+   "vpn_hostname":null,"vpn_reachable":null,
+   "plugs":[{"name":"rack","provider":"hubspace","device_name":"rack-plug","power_off_seconds":30,"affects":["nas","desktop"]}]},
   {"name":"nas","type":"proxmox","ip":"192.168.0.10","mac":"11:22:33:44:55:66","online":false,
    "local":false,"services":[],"service_statuses":{},
    "vpn_hostname":"vpn.example","vpn_reachable":false,
+   "plugs":[{"name":"rack","provider":"hubspace","device_name":"rack-plug","power_off_seconds":30,"affects":["nas","desktop"]}],
    "vms":[{"name":"main","vmid":100,"ip":"192.168.0.200","online":true,
            "services":["docker"],"service_statuses":{"docker":"active"},
            "vpn_hostname":null,"vpn_reachable":null}]}
@@ -88,19 +90,31 @@ func fakeServer(t *testing.T) *httptest.Server {
 	mux.HandleFunc("POST /api/hosts/{name}/vpn-repair", vpn)
 	mux.HandleFunc("POST /api/hosts/{name}/vms/{vm}/vpn-repair", vpn)
 
+	plugsBody := `[
+	  {"name":"rack","provider":"hubspace","device_name":"rack-plug","power_off_seconds":30,"affects":["nas","desktop"],"on":true},
+	  {"name":"tv","provider":"hubspace","device_name":"tv-plug","power_off_seconds":5,"affects":[],"on":false}
+	]`
 	mux.HandleFunc("GET /api/plugs", func(w http.ResponseWriter, r *http.Request) {
-		jsonResp(w, `[{"host":"nas","provider":"hubspace","device_name":"nas-plug","power_off_seconds":30,"on":true}]`)
+		jsonResp(w, plugsBody)
 	})
-	mux.HandleFunc("GET /api/hosts/{name}/plug", func(w http.ResponseWriter, r *http.Request) {
-		if r.PathValue("name") == "ghost" {
-			detail(w, http.StatusNotFound, "Host 'ghost' not found")
-			return
+	mux.HandleFunc("GET /api/plugs/{name}", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		switch name {
+		case "rack":
+			jsonResp(w, `{"name":"rack","provider":"hubspace","device_name":"rack-plug","power_off_seconds":30,"affects":["nas","desktop"],"on":true}`)
+		case "tv":
+			jsonResp(w, `{"name":"tv","provider":"hubspace","device_name":"tv-plug","power_off_seconds":5,"affects":[],"on":false}`)
+		default:
+			detail(w, http.StatusNotFound, "Plug '"+name+"' not found")
 		}
-		jsonResp(w, `{"host":"`+r.PathValue("name")+`","provider":"hubspace","device_name":"nas-plug","power_off_seconds":30,"on":false}`)
 	})
-	mux.HandleFunc("POST /api/hosts/{name}/plug/{action}", func(w http.ResponseWriter, r *http.Request) {
-		action := r.PathValue("action")
-		jsonResp(w, `{"status":"`+action+` complete","host":"`+r.PathValue("name")+`","plug":"nas-plug","on":true}`)
+	mux.HandleFunc("POST /api/plugs/{name}/{action}", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		affects := `[]`
+		if name == "rack" {
+			affects = `["nas","desktop"]`
+		}
+		jsonResp(w, `{"status":"`+r.PathValue("action")+` complete","plug":"`+name+`","affects":`+affects+`,"on":true}`)
 	})
 	mux.HandleFunc("GET /api/hubspace/devices", func(w http.ResponseWriter, r *http.Request) {
 		jsonResp(w, `[{"id":"dev-plug","name":"Plug One","class":"power-outlet"}]`)
@@ -203,7 +217,7 @@ func TestExecute_HostsTable(t *testing.T) {
 	if got.code != 0 {
 		t.Fatalf("code = %d, stderr = %q", got.code, got.stderr)
 	}
-	for _, want := range []string{"NAME", "TYPE", "SERVICES", "VPN", "desktop", "proxmox", "  main", "nginx=active", "vpn.example (unreachable)"} {
+	for _, want := range []string{"NAME", "TYPE", "SERVICES", "VPN", "PLUGS", "desktop", "proxmox", "  main", "nginx=active", "vpn.example (unreachable)", "rack"} {
 		if !strings.Contains(got.stdout, want) {
 			t.Errorf("stdout missing %q:\n%s", want, got.stdout)
 		}
@@ -484,7 +498,7 @@ func TestExecute_PlugsTable(t *testing.T) {
 	if got.code != 0 {
 		t.Fatalf("code = %d, stderr = %q", got.code, got.stderr)
 	}
-	for _, want := range []string{"HOST", "PLUG", "STATE", "nas", "nas-plug", "on"} {
+	for _, want := range []string{"NAME", "DEVICE", "AFFECTS", "STATE", "rack", "rack-plug", "nas,desktop", "tv", "tv-plug"} {
 		if !strings.Contains(got.stdout, want) {
 			t.Errorf("stdout missing %q:\n%s", want, got.stdout)
 		}
@@ -498,37 +512,55 @@ func TestExecute_PlugsJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(got.stdout), &plugs); err != nil {
 		t.Fatalf("stdout not JSON: %v (%q)", err, got.stdout)
 	}
-	if len(plugs) != 1 || plugs[0].Host != "nas" || !plugs[0].On {
+	if len(plugs) != 2 || plugs[0].Name != "rack" || !plugs[0].On || plugs[1].Name != "tv" || plugs[1].On {
 		t.Errorf("plugs = %+v", plugs)
+	}
+	if len(plugs[0].Affects) != 2 || plugs[0].Affects[0] != "nas" || plugs[0].Affects[1] != "desktop" {
+		t.Errorf("rack affects = %v", plugs[0].Affects)
+	}
+	if len(plugs[1].Affects) != 0 {
+		t.Errorf("tv affects = %v, want empty", plugs[1].Affects)
+	}
+}
+
+func TestExecute_PlugsHostFilter(t *testing.T) {
+	srv := fakeServer(t)
+	got := runCLI(t, srv.URL, "", false, "-o", "json", "plugs", "--host", "nas")
+	var plugs []client.Plug
+	if err := json.Unmarshal([]byte(got.stdout), &plugs); err != nil {
+		t.Fatalf("stdout not JSON: %v (%q)", err, got.stdout)
+	}
+	if len(plugs) != 1 || plugs[0].Name != "rack" {
+		t.Errorf("plugs = %+v, want rack only", plugs)
 	}
 }
 
 func TestExecute_PlugStatus(t *testing.T) {
 	srv := fakeServer(t)
-	got := runCLI(t, srv.URL, "", false, "plug", "status", "nas")
+	got := runCLI(t, srv.URL, "", false, "plug", "status", "rack")
 	if got.code != 0 {
 		t.Fatalf("code = %d, stderr = %q", got.code, got.stderr)
 	}
-	if !strings.Contains(got.stdout, "nas: nas-plug is off") {
+	if !strings.Contains(got.stdout, "rack: rack-plug is on (affects: nas, desktop)") {
 		t.Errorf("stdout = %q", got.stdout)
 	}
 }
 
 func TestExecute_PlugStatusJSON(t *testing.T) {
 	srv := fakeServer(t)
-	got := runCLI(t, srv.URL, "", false, "-o", "json", "plug", "status", "nas")
+	got := runCLI(t, srv.URL, "", false, "-o", "json", "plug", "status", "tv")
 	var plug client.Plug
 	if err := json.Unmarshal([]byte(got.stdout), &plug); err != nil {
 		t.Fatalf("stdout not JSON: %v (%q)", err, got.stdout)
 	}
-	if plug.Host != "nas" || plug.On {
+	if plug.Name != "tv" || plug.On || len(plug.Affects) != 0 {
 		t.Errorf("plug = %+v", plug)
 	}
 }
 
 func TestExecute_PlugOffRequiresConfirmation(t *testing.T) {
 	srv := fakeServer(t)
-	got := runCLI(t, srv.URL, "", false, "plug", "off", "nas")
+	got := runCLI(t, srv.URL, "", false, "plug", "off", "rack")
 	if got.code != exitError {
 		t.Fatalf("code = %d, want %d", got.code, exitError)
 	}
@@ -537,20 +569,56 @@ func TestExecute_PlugOffRequiresConfirmation(t *testing.T) {
 	}
 }
 
-func TestExecute_PlugOffWithYes(t *testing.T) {
+func TestExecute_PlugOffConfirmationNamesAffects(t *testing.T) {
 	srv := fakeServer(t)
-	got := runCLI(t, srv.URL, "", false, "-y", "plug", "off", "nas")
+	got := runCLI(t, srv.URL, "n\n", true, "plug", "off", "rack")
 	if got.code != 0 {
 		t.Fatalf("code = %d, stderr = %q", got.code, got.stderr)
 	}
-	if !strings.Contains(got.stderr, "nas: off complete") {
+	if !strings.Contains(got.stderr, "affect hosts: nas, desktop") {
+		t.Errorf("stderr = %q", got.stderr)
+	}
+	if !strings.Contains(got.stderr, "aborted") {
+		t.Errorf("stderr = %q", got.stderr)
+	}
+}
+
+func TestExecute_PlugOnRequiresConfirmationWhenAffected(t *testing.T) {
+	srv := fakeServer(t)
+	got := runCLI(t, srv.URL, "", false, "plug", "on", "rack")
+	if got.code != exitError {
+		t.Fatalf("code = %d, want %d", got.code, exitError)
+	}
+	if !strings.Contains(got.stderr, "refusing to proceed") {
+		t.Errorf("stderr = %q", got.stderr)
+	}
+}
+
+func TestExecute_PlugOnStandaloneNoPrompt(t *testing.T) {
+	srv := fakeServer(t)
+	got := runCLI(t, srv.URL, "", false, "plug", "on", "tv")
+	if got.code != 0 {
+		t.Fatalf("code = %d, stderr = %q", got.code, got.stderr)
+	}
+	if !strings.Contains(got.stderr, "tv: on complete") {
+		t.Errorf("stderr = %q", got.stderr)
+	}
+}
+
+func TestExecute_PlugOffWithYes(t *testing.T) {
+	srv := fakeServer(t)
+	got := runCLI(t, srv.URL, "", false, "-y", "plug", "off", "rack")
+	if got.code != 0 {
+		t.Fatalf("code = %d, stderr = %q", got.code, got.stderr)
+	}
+	if !strings.Contains(got.stderr, "rack: off complete") {
 		t.Errorf("stderr = %q", got.stderr)
 	}
 }
 
 func TestExecute_PlugCycleJSON(t *testing.T) {
 	srv := fakeServer(t)
-	got := runCLI(t, srv.URL, "", false, "-o", "json", "plug", "cycle", "nas")
+	got := runCLI(t, srv.URL, "", false, "-o", "json", "plug", "cycle", "rack")
 	if got.code != 0 {
 		t.Fatalf("code = %d, stderr = %q", got.code, got.stderr)
 	}
@@ -558,7 +626,7 @@ func TestExecute_PlugCycleJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(got.stdout), &res); err != nil {
 		t.Fatalf("stdout not JSON: %v (%q)", err, got.stdout)
 	}
-	if res.Action != "cycle" || res.Host != "nas" || res.Plug != "nas-plug" || res.On == nil || !*res.On {
+	if res.Action != "cycle" || res.Plug != "rack" || len(res.Affects) != 2 || res.On == nil || !*res.On {
 		t.Errorf("result = %+v", res)
 	}
 }
@@ -590,7 +658,7 @@ func TestExecute_PlugsPlain(t *testing.T) {
 	if got.code != 0 {
 		t.Fatalf("code = %d", got.code)
 	}
-	if !strings.Contains(got.stdout, "nas\tnas-plug\ton") {
+	if !strings.Contains(got.stdout, "rack\track-plug\tnas,desktop\ton") {
 		t.Errorf("plain output = %q", got.stdout)
 	}
 }
@@ -683,21 +751,25 @@ func TestExecute_PlugStatusAPIError(t *testing.T) {
 	if got.code != exitError {
 		t.Fatalf("code = %d, want %d", got.code, exitError)
 	}
-	if !strings.Contains(got.stderr, "Host 'ghost' not found") {
+	if !strings.Contains(got.stderr, "Plug 'ghost' not found") {
 		t.Errorf("stderr = %q", got.stderr)
 	}
 }
 
 func TestExecute_PlugActionAPIError(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/hosts/{name}/plug/{action}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/plugs/{name}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"name":"tv","provider":"hubspace","device_name":"tv-plug","power_off_seconds":5,"affects":[],"on":false}`)
+	})
+	mux.HandleFunc("POST /api/plugs/{name}/{action}", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 		io.WriteString(w, `{"detail":"hubspace down"}`)
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	got := runCLI(t, srv.URL, "", false, "plug", "on", "nas")
+	got := runCLI(t, srv.URL, "", false, "plug", "on", "tv")
 	if got.code != exitError {
 		t.Fatalf("code = %d, want %d", got.code, exitError)
 	}
@@ -712,6 +784,22 @@ func TestCycleTimeout(t *testing.T) {
 	}
 	if got := cycleTimeout(5 * time.Minute); got != 5*time.Minute {
 		t.Errorf("cycleTimeout(5m) = %v, want 5m", got)
+	}
+}
+
+func TestFormatPlugHelpers(t *testing.T) {
+	if got := formatAffects(nil); got != "-" {
+		t.Errorf("formatAffects(nil) = %q", got)
+	}
+	if got := formatAffects([]string{"nas", "desktop"}); got != "nas,desktop" {
+		t.Errorf("formatAffects = %q", got)
+	}
+	if got := formatPlugNames(nil); got != "-" {
+		t.Errorf("formatPlugNames(nil) = %q", got)
+	}
+	plugs := []client.PlugInfo{{Name: "rack"}, {Name: "nas"}}
+	if got := formatPlugNames(plugs); got != "rack,nas" {
+		t.Errorf("formatPlugNames = %q", got)
 	}
 }
 

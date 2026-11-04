@@ -3,7 +3,7 @@
 #
 # Schema version read by this binary. A binary rejects a file declaring a
 # newer version — upgrade lanctl before using a newer config.
-config_version: 2
+config_version: 3
 #
 # Syncing one file across boxes: omit `local:` everywhere and set
 # LANCTL_LOCAL_HOST=<name> (or <host>/<vm>) in each box's .env instead.
@@ -27,6 +27,19 @@ config_version: 2
 # hubspace:
 #   username: user@example.com
 #   password: "your-password"
+
+# Optional: smart plugs. `name` is the local lanctl identity; `affects` names
+# the hosts that depend on the plug (none, one, or several).
+# v2 configs with hosts[].plug are converted automatically.
+# plugs:
+#   - name: tv                     # standalone plug, no managed host
+#     provider: hubspace           # optional; defaults to hubspace
+#     device_name: tv-plug         # or a stable device_id
+#     power_off_seconds: 5         # power-cycle off delay (default 30)
+#   - name: nas
+#     device_name: nas-plug
+#     power_off_seconds: 30
+#     affects: [nas]
 
 hosts:
   # Use local: true for the machine running lanctl itself.
@@ -54,10 +67,6 @@ hosts:
     # user_services:                 # optional — systemd user services of the
     #   - myapp-backend              # SSH user (systemctl --user); requires
     #                                # loginctl enable-linger tom
-    # plug:                          # optional — Hubspace smart plug
-    #   provider: hubspace           # optional; defaults to hubspace
-    #   device_name: desktop-plug    # or a stable device_id
-    #   power_off_seconds: 30        # power-cycle off delay (default 30)
 
   # Proxmox hypervisor — ip/mac/ssh_user refer to the physical machine.
   # VMs running on it are listed under vms:.

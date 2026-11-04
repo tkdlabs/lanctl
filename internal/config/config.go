@@ -16,7 +16,7 @@ const defaultSSHKey = "~/.ssh/id_ed25519"
 // SupportedConfigVersion is the config schema version this binary reads.
 // A hosts.yaml declaring a newer config_version is rejected so that a
 // config written for a newer binary is never silently misread.
-const SupportedConfigVersion = 2
+const SupportedConfigVersion = 3
 
 // Hubspace holds the account credentials used for smart-plug control.
 type Hubspace struct {
@@ -24,13 +24,16 @@ type Hubspace struct {
 	Password string `yaml:"password,omitempty"`
 }
 
-// Plug describes a smart plug attached to a host. Phase 1 supports Hubspace
-// power outlets only.
+// Plug describes a smart plug. Name is the local lanctl identity; Affects is
+// optional metadata naming the hosts that depend on this plug. Phase 1
+// supports Hubspace power outlets only.
 type Plug struct {
-	Provider        string `yaml:"provider,omitempty"`
-	DeviceName      string `yaml:"device_name,omitempty"`
-	DeviceID        string `yaml:"device_id,omitempty"`
-	PowerOffSeconds int    `yaml:"power_off_seconds,omitempty"`
+	Name            string   `yaml:"name"`
+	Provider        string   `yaml:"provider,omitempty"`
+	DeviceName      string   `yaml:"device_name,omitempty"`
+	DeviceID        string   `yaml:"device_id,omitempty"`
+	PowerOffSeconds int      `yaml:"power_off_seconds,omitempty"`
+	Affects         []string `yaml:"affects,omitempty"`
 }
 
 const (
@@ -48,6 +51,7 @@ type Config struct {
 	SSHKey        string    `yaml:"ssh_key,omitempty"`
 	NordVPNToken  string    `yaml:"nordvpn_token,omitempty"`
 	Hubspace      *Hubspace `yaml:"hubspace,omitempty"`
+	Plugs         []Plug    `yaml:"plugs,omitempty"`
 	Hosts         []Host    `yaml:"hosts"`
 }
 
@@ -64,8 +68,10 @@ type Host struct {
 	Local        bool     `yaml:"local,omitempty"`
 	Services     []string `yaml:"services,omitempty"`
 	UserServices []string `yaml:"user_services,omitempty"`
-	Plug         *Plug    `yaml:"plug,omitempty"`
-	VMs          []VM     `yaml:"vms,omitempty"`
+	// Plug is the legacy v2 host-attached form. It is converted into a
+	// top-level plug during Load and cleared afterwards.
+	Plug *Plug `yaml:"plug,omitempty"`
+	VMs  []VM  `yaml:"vms,omitempty"`
 }
 
 // VM represents a virtual machine under a Proxmox host.
@@ -137,7 +143,7 @@ func LoadFile(path string) (Config, error) {
 		return cfg, fmt.Errorf("no hosts found in %s. Copy hosts.example.yaml and edit it", path)
 	}
 
-	if err := validatePlugs(&cfg); err != nil {
+	if err := normalizePlugs(&cfg); err != nil {
 		return cfg, err
 	}
 
@@ -211,32 +217,80 @@ func applySecretEnvOverrides(cfg *Config) {
 	}
 }
 
-// validatePlugs normalizes provider and delay defaults and rejects references
-// that could never resolve at runtime.
-func validatePlugs(cfg *Config) error {
+// normalizePlugs converts the legacy v2 host-attached form, validates plug
+// names/references, and applies provider/delay defaults.
+func normalizePlugs(cfg *Config) error {
+	hostSet := make(map[string]bool, len(cfg.Hosts))
+	for _, h := range cfg.Hosts {
+		hostSet[h.Name] = true
+	}
+
+	// v2 configs attached a plug to a host. Convert it to a first-class plug
+	// named after the host so existing CLI/API workflows keep working.
 	for i := range cfg.Hosts {
 		h := &cfg.Hosts[i]
 		if h.Plug == nil {
 			continue
 		}
-		p := h.Plug
+		legacy := *h.Plug
+		legacy.Name = h.Name
+		legacy.Affects = []string{h.Name}
+		cfg.Plugs = append(cfg.Plugs, legacy)
+		h.Plug = nil
+	}
+
+	seen := make(map[string]bool, len(cfg.Plugs))
+	for i := range cfg.Plugs {
+		p := &cfg.Plugs[i]
+		p.Name = strings.TrimSpace(p.Name)
+		if p.Name == "" {
+			return fmt.Errorf("plug #%d: name is required", i+1)
+		}
+		if seen[p.Name] {
+			return fmt.Errorf("duplicate plug name %q", p.Name)
+		}
+		seen[p.Name] = true
+
 		if p.Provider == "" {
 			p.Provider = PlugProviderHubspace
 		} else if !strings.EqualFold(p.Provider, PlugProviderHubspace) {
-			return fmt.Errorf("host %q: unsupported plug provider %q (only %q is supported)",
-				h.Name, p.Provider, PlugProviderHubspace)
+			return fmt.Errorf("plug %q: unsupported provider %q (only %q is supported)",
+				p.Name, p.Provider, PlugProviderHubspace)
 		} else {
 			p.Provider = PlugProviderHubspace
 		}
 		if strings.TrimSpace(p.DeviceID) == "" && strings.TrimSpace(p.DeviceName) == "" {
-			return fmt.Errorf("host %q: plug needs device_id or device_name", h.Name)
+			return fmt.Errorf("plug %q: needs device_id or device_name", p.Name)
 		}
 		if p.PowerOffSeconds < 0 || p.PowerOffSeconds > maxPowerOffSeconds {
-			return fmt.Errorf("host %q: plug power_off_seconds must be between 0 and %d",
-				h.Name, maxPowerOffSeconds)
+			return fmt.Errorf("plug %q: power_off_seconds must be between 0 and %d",
+				p.Name, maxPowerOffSeconds)
 		}
 		if p.PowerOffSeconds == 0 {
 			p.PowerOffSeconds = defaultPowerOffSeconds
+		}
+
+		if len(p.Affects) > 0 {
+			affects := make([]string, 0, len(p.Affects))
+			seenAffects := make(map[string]bool, len(p.Affects))
+			for _, name := range p.Affects {
+				name = strings.TrimSpace(name)
+				if name == "" {
+					return fmt.Errorf("plug %q: affects contains an empty host name", p.Name)
+				}
+				if !hostSet[name] {
+					return fmt.Errorf("plug %q: affects references unknown host %q (hosts: %s)",
+						p.Name, name, joinOrNone(hostNames(cfg)))
+				}
+				if seenAffects[name] {
+					return fmt.Errorf("plug %q: affects lists host %q more than once", p.Name, name)
+				}
+				seenAffects[name] = true
+				affects = append(affects, name)
+			}
+			p.Affects = affects
+		} else {
+			p.Affects = nil
 		}
 	}
 	return nil
@@ -252,25 +306,42 @@ func (c Config) HubspaceCredentials() (username, password string) {
 	return c.Hubspace.Username, c.Hubspace.Password
 }
 
-// HasPlugs reports whether any host has a smart plug configured.
+// HasPlugs reports whether any smart plug is configured.
 func (c Config) HasPlugs() bool {
-	for _, h := range c.Hosts {
-		if h.Plug != nil {
-			return true
-		}
-	}
-	return false
+	return len(c.Plugs) > 0
 }
 
-// PlugHosts lists hosts with a configured plug, for diagnostics.
-func (c Config) PlugHosts() []string {
-	var names []string
-	for _, h := range c.Hosts {
-		if h.Plug != nil {
-			names = append(names, h.Name)
-		}
+// PlugNames lists configured plug names, for diagnostics.
+func (c Config) PlugNames() []string {
+	names := make([]string, 0, len(c.Plugs))
+	for _, p := range c.Plugs {
+		names = append(names, p.Name)
 	}
 	return names
+}
+
+// PlugByName resolves a first-class plug by its local name.
+func (c Config) PlugByName(name string) (Plug, bool) {
+	for _, p := range c.Plugs {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return Plug{}, false
+}
+
+// PlugsForHost returns plugs whose affects list names host.
+func (c Config) PlugsForHost(host string) []Plug {
+	out := make([]Plug, 0)
+	for _, p := range c.Plugs {
+		for _, name := range p.Affects {
+			if name == host {
+				out = append(out, p)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // OffDuration returns the configured power-cycle off delay.

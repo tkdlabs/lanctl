@@ -72,8 +72,8 @@ func TestRequestPathsAndMethods(t *testing.T) {
 		{"logs", func(c *Client) error { _, err := c.Logs(ctx, "desktop", "", "nginx", 50); return err }, "GET", "/api/hosts/desktop/services/nginx/logs", "lines=50"},
 		{"logs no lines", func(c *Client) error { _, err := c.Logs(ctx, "desktop", "", "nginx", 0); return err }, "GET", "/api/hosts/desktop/services/nginx/logs", ""},
 		{"logs vm", func(c *Client) error { _, err := c.Logs(ctx, "nas", "main", "lanctl.service", 5); return err }, "GET", "/api/hosts/nas/vms/main/services/lanctl.service/logs", "lines=5"},
-		{"plug status", func(c *Client) error { _, err := c.PlugStatus(ctx, "nas box"); return err }, "GET", "/api/hosts/nas%20box/plug", ""},
-		{"plug on", func(c *Client) error { _, err := c.PlugControl(ctx, "nas box", "on"); return err }, "POST", "/api/hosts/nas%20box/plug/on", ""},
+		{"plug status", func(c *Client) error { _, err := c.PlugStatus(ctx, "nas box"); return err }, "GET", "/api/plugs/nas%20box", ""},
+		{"plug on", func(c *Client) error { _, err := c.PlugControl(ctx, "nas box", "on"); return err }, "POST", "/api/plugs/nas%20box/on", ""},
 	}
 
 	for _, tt := range tests {
@@ -132,7 +132,7 @@ func TestHosts_DecodesHostsAndVMs(t *testing.T) {
 		 "local":true,"services":["nginx"],"user_services":["myapp"],
 		 "service_statuses":{"nginx":"active","myapp":"inactive"},
 		 "vpn_hostname":null,"vpn_reachable":null,
-		 "plug":{"provider":"hubspace","device_name":"desktop-plug","power_off_seconds":30}}
+		 "plugs":[{"name":"desktop","provider":"hubspace","device_name":"desktop-plug","power_off_seconds":30,"affects":["desktop"]}]}
 	]`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, body)
@@ -169,13 +169,13 @@ func TestHosts_DecodesHostsAndVMs(t *testing.T) {
 	if len(hosts[1].UserServices) != 1 || hosts[1].UserServices[0] != "myapp" {
 		t.Errorf("desktop.UserServices = %v, want [myapp]", hosts[1].UserServices)
 	}
-	if hosts[1].Plug == nil || hosts[1].Plug.DeviceName != "desktop-plug" {
-		t.Errorf("desktop.Plug = %+v, want desktop-plug", hosts[1].Plug)
+	if len(hosts[1].Plugs) != 1 || hosts[1].Plugs[0].Name != "desktop" || hosts[1].Plugs[0].DeviceName != "desktop-plug" {
+		t.Errorf("desktop.Plugs = %+v, want desktop-plug", hosts[1].Plugs)
 	}
 }
 
 func TestPlugs_DecodesList(t *testing.T) {
-	body := `[{"host":"nas","provider":"hubspace","device_name":"nas-plug","power_off_seconds":30,"on":true}]`
+	body := `[{"name":"nas","provider":"hubspace","device_name":"nas-plug","power_off_seconds":30,"affects":["nas"],"on":true}]`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, body)
 	}))
@@ -185,7 +185,7 @@ func TestPlugs_DecodesList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plugs: %v", err)
 	}
-	if len(plugs) != 1 || plugs[0].Host != "nas" || !plugs[0].On {
+	if len(plugs) != 1 || plugs[0].Name != "nas" || !plugs[0].On {
 		t.Errorf("plugs = %+v", plugs)
 	}
 }
@@ -208,7 +208,7 @@ func TestPlugs_EmptyAndNullBecomeEmptySlice(t *testing.T) {
 
 func TestPlugControl_DecodesResult(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, `{"status":"power cycle complete","host":"nas","plug":"nas-plug","on":true}`)
+		io.WriteString(w, `{"status":"power cycle complete","plug":"nas","affects":["nas"],"on":true}`)
 	}))
 	defer srv.Close()
 
@@ -216,7 +216,7 @@ func TestPlugControl_DecodesResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlugControl: %v", err)
 	}
-	if res.Status != "power cycle complete" || res.Host != "nas" || res.Plug != "nas-plug" || !res.On {
+	if res.Status != "power cycle complete" || res.Plug != "nas" || len(res.Affects) != 1 || res.Affects[0] != "nas" || !res.On {
 		t.Errorf("result = %+v", res)
 	}
 }

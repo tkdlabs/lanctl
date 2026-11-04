@@ -145,18 +145,26 @@ func (f *fakeOps) scopesSeen(want ...bool) bool {
 }
 
 const plugConfig = `
-config_version: 2
+config_version: 3
 hubspace:
   username: user@example.com
   password: secret
+plugs:
+  - name: nas
+    device_name: nas-plug
+    power_off_seconds: 7
+    affects: [nas]
+  - name: tv
+    device_name: tv-plug
+    power_off_seconds: 5
 hosts:
   - name: nas
     ip: 192.0.2.10
     mac: "AA:BB:CC:DD:EE:FF"
     ssh_user: admin
-    plug:
-      device_name: nas-plug
-      power_off_seconds: 7
+  - name: desktop
+    ip: 192.0.2.11
+    mac: "11:22:33:44:55:66"
 `
 
 func TestGetHosts_PlugMetadata(t *testing.T) {
@@ -170,9 +178,16 @@ func TestGetHosts_PlugMetadata(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	plug, ok := result[0]["plug"].(map[string]any)
-	if !ok {
+	plugs, ok := result[0]["plugs"].([]any)
+	if !ok || len(plugs) != 1 {
 		t.Fatalf("missing plug metadata: %v", result[0])
+	}
+	plug, ok := plugs[0].(map[string]any)
+	if !ok {
+		t.Fatalf("bad plug metadata: %v", plugs[0])
+	}
+	if plug["name"] != "nas" {
+		t.Errorf("name = %v, want nas", plug["name"])
 	}
 	if plug["device_name"] != "nas-plug" {
 		t.Errorf("device_name = %v, want nas-plug", plug["device_name"])
@@ -183,14 +198,46 @@ func TestGetHosts_PlugMetadata(t *testing.T) {
 	if plug["power_off_seconds"] != float64(7) {
 		t.Errorf("power_off_seconds = %v, want 7", plug["power_off_seconds"])
 	}
+	if affects, ok := plug["affects"].([]any); !ok || len(affects) != 1 || affects[0] != "nas" {
+		t.Errorf("affects = %v, want [nas]", plug["affects"])
+	}
 	if len(f.plugStateRefs) != 0 {
 		t.Errorf("/api/hosts contacted Hubspace: %+v", f.plugStateRefs)
 	}
 }
 
+func TestGetHosts_StandalonePlugNotShown(t *testing.T) {
+	useFakeOps(t)
+	writeConfig(t, `
+config_version: 3
+hubspace:
+  username: user@example.com
+  password: secret
+plugs:
+  - name: tv
+    device_name: tv-plug
+hosts:
+  - name: nas
+    ip: 192.0.2.10
+    mac: "AA:BB:CC:DD:EE:FF"
+`)
+	rr := doRequest(t, "GET", "/api/hosts")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var result []map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	plugs, ok := result[0]["plugs"].([]any)
+	if !ok || len(plugs) != 0 {
+		t.Errorf("host plugs = %v, want empty", result[0]["plugs"])
+	}
+}
+
 func TestGetPlugs(t *testing.T) {
 	f := useFakeOps(t)
-	f.plugStates = map[string]bool{"nas": true}
+	f.plugStates = map[string]bool{"nas": true, "tv": false}
 	writeConfig(t, plugConfig)
 
 	rr := doRequest(t, "GET", "/api/plugs")
@@ -201,14 +248,20 @@ func TestGetPlugs(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result) != 1 {
-		t.Fatalf("plugs = %d, want 1", len(result))
+	if len(result) != 2 {
+		t.Fatalf("plugs = %d, want 2", len(result))
 	}
-	if result[0].Host != "nas" || result[0].DeviceName != "nas-plug" || !result[0].On {
-		t.Errorf("unexpected plug: %+v", result[0])
+	if result[0].Name != "nas" || result[0].DeviceName != "nas-plug" || !result[0].On {
+		t.Errorf("unexpected nas plug: %+v", result[0])
 	}
-	if len(f.plugStateRefs) != 1 || f.plugStateRefs[0].DeviceName != "nas-plug" {
-		t.Errorf("state refs = %+v", f.plugStateRefs)
+	if len(result[0].Affects) != 1 || result[0].Affects[0] != "nas" {
+		t.Errorf("nas affects = %v, want [nas]", result[0].Affects)
+	}
+	if result[1].Name != "tv" || result[1].On || len(result[1].Affects) != 0 {
+		t.Errorf("unexpected tv plug: %+v", result[1])
+	}
+	if len(f.plugStateRefs) != 2 {
+		t.Errorf("state refs = %+v, want 2", f.plugStateRefs)
 	}
 }
 
@@ -232,12 +285,13 @@ hosts:
 func TestGetPlugs_MissingCredentials(t *testing.T) {
 	useFakeOps(t)
 	writeConfig(t, `
+plugs:
+  - name: nas
+    device_name: nas-plug
 hosts:
   - name: nas
     ip: 192.0.2.10
     mac: "AA:BB:CC:DD:EE:FF"
-    plug:
-      device_name: nas-plug
 `)
 	rr := doRequest(t, "GET", "/api/plugs")
 	if rr.Code != http.StatusBadRequest {
@@ -263,7 +317,7 @@ func TestPlugStatus(t *testing.T) {
 	f.plugStates = map[string]bool{"nas": false}
 	writeConfig(t, plugConfig)
 
-	rr := doRequest(t, "GET", "/api/hosts/nas/plug")
+	rr := doRequest(t, "GET", "/api/plugs/nas")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
@@ -271,29 +325,19 @@ func TestPlugStatus(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Host != "nas" || result.DeviceName != "nas-plug" || result.On {
+	if result.Name != "nas" || result.DeviceName != "nas-plug" || result.On {
 		t.Errorf("unexpected status: %+v", result)
+	}
+	if len(result.Affects) != 1 || result.Affects[0] != "nas" {
+		t.Errorf("affects = %v, want [nas]", result.Affects)
 	}
 }
 
 func TestPlugStatus_Errors(t *testing.T) {
-	t.Run("unknown host", func(t *testing.T) {
+	t.Run("unknown plug", func(t *testing.T) {
 		useFakeOps(t)
 		writeConfig(t, plugConfig)
-		rr := doRequest(t, "GET", "/api/hosts/ghost/plug")
-		if rr.Code != http.StatusNotFound {
-			t.Fatalf("expected 404, got %d: %s", rr.Code, rr.Body.String())
-		}
-	})
-	t.Run("no plug", func(t *testing.T) {
-		useFakeOps(t)
-		writeConfig(t, `
-hosts:
-  - name: desktop
-    ip: 192.0.2.10
-    mac: "AA:BB:CC:DD:EE:FF"
-`)
-		rr := doRequest(t, "GET", "/api/hosts/desktop/plug")
+		rr := doRequest(t, "GET", "/api/plugs/ghost")
 		if rr.Code != http.StatusNotFound {
 			t.Fatalf("expected 404, got %d: %s", rr.Code, rr.Body.String())
 		}
@@ -301,14 +345,15 @@ hosts:
 	t.Run("missing credentials", func(t *testing.T) {
 		useFakeOps(t)
 		writeConfig(t, `
+plugs:
+  - name: nas
+    device_name: nas-plug
 hosts:
   - name: nas
     ip: 192.0.2.10
     mac: "AA:BB:CC:DD:EE:FF"
-    plug:
-      device_name: nas-plug
 `)
-		rr := doRequest(t, "GET", "/api/hosts/nas/plug")
+		rr := doRequest(t, "GET", "/api/plugs/nas")
 		if rr.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
 		}
@@ -317,7 +362,7 @@ hosts:
 		f := useFakeOps(t)
 		f.plugStatesErr = errors.New("hubspace down")
 		writeConfig(t, plugConfig)
-		rr := doRequest(t, "GET", "/api/hosts/nas/plug")
+		rr := doRequest(t, "GET", "/api/plugs/nas")
 		if rr.Code != http.StatusBadGateway {
 			t.Fatalf("expected 502, got %d: %s", rr.Code, rr.Body.String())
 		}
@@ -330,7 +375,7 @@ func TestPlugControl(t *testing.T) {
 			f := useFakeOps(t)
 			writeConfig(t, plugConfig)
 
-			rr := doRequest(t, "POST", "/api/hosts/nas/plug/"+action)
+			rr := doRequest(t, "POST", "/api/plugs/nas/"+action)
 			if rr.Code != http.StatusOK {
 				t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 			}
@@ -338,8 +383,11 @@ func TestPlugControl(t *testing.T) {
 			if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil {
 				t.Fatal(err)
 			}
-			if result.Host != "nas" || result.Plug != "nas-plug" {
+			if result.Plug != "nas" {
 				t.Errorf("unexpected result: %+v", result)
+			}
+			if len(result.Affects) != 1 || result.Affects[0] != "nas" {
+				t.Errorf("affects = %v, want [nas]", result.Affects)
 			}
 
 			switch action {
@@ -365,21 +413,16 @@ func TestPlugControl(t *testing.T) {
 func TestPlugControl_InvalidAction(t *testing.T) {
 	useFakeOps(t)
 	writeConfig(t, plugConfig)
-	rr := doRequest(t, "POST", "/api/hosts/nas/plug/bogus")
+	rr := doRequest(t, "POST", "/api/plugs/nas/bogus")
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
 
-func TestPlugControl_NoPlug(t *testing.T) {
+func TestPlugControl_UnknownPlug(t *testing.T) {
 	useFakeOps(t)
-	writeConfig(t, `
-hosts:
-  - name: desktop
-    ip: 192.0.2.10
-    mac: "AA:BB:CC:DD:EE:FF"
-`)
-	rr := doRequest(t, "POST", "/api/hosts/desktop/plug/on")
+	writeConfig(t, plugConfig)
+	rr := doRequest(t, "POST", "/api/plugs/ghost/on")
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d: %s", rr.Code, rr.Body.String())
 	}
@@ -388,14 +431,15 @@ hosts:
 func TestPlugControl_MissingCredentials(t *testing.T) {
 	useFakeOps(t)
 	writeConfig(t, `
+plugs:
+  - name: nas
+    device_name: nas-plug
 hosts:
   - name: nas
     ip: 192.0.2.10
     mac: "AA:BB:CC:DD:EE:FF"
-    plug:
-      device_name: nas-plug
 `)
-	rr := doRequest(t, "POST", "/api/hosts/nas/plug/on")
+	rr := doRequest(t, "POST", "/api/plugs/nas/on")
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
 	}
@@ -405,7 +449,7 @@ func TestPlugControl_UpstreamError(t *testing.T) {
 	f := useFakeOps(t)
 	f.plugSetErr = errors.New("hubspace down")
 	writeConfig(t, plugConfig)
-	rr := doRequest(t, "POST", "/api/hosts/nas/plug/on")
+	rr := doRequest(t, "POST", "/api/plugs/nas/on")
 	if rr.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d: %s", rr.Code, rr.Body.String())
 	}
@@ -420,7 +464,7 @@ func TestPlugControl_Conflict(t *testing.T) {
 	}
 	defer release()
 
-	rr := doRequest(t, "POST", "/api/hosts/nas/plug/on")
+	rr := doRequest(t, "POST", "/api/plugs/nas/on")
 	if rr.Code != http.StatusConflict {
 		t.Fatalf("expected 409, got %d: %s", rr.Code, rr.Body.String())
 	}

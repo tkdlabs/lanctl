@@ -2,6 +2,10 @@
 
 Issue: #25.
 
+> Historical note: this doc describes the original host-attached model. It was
+> generalized to first-class plugs with optional `affects` bindings in #26; see
+> `done_13_plug_bindings.md`.
+
 ## Problem
 
 lanctl can wake a host and shut it down over SSH, but it cannot switch the
