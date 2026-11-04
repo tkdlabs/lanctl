@@ -92,7 +92,7 @@ See `hosts.example.yaml` for the full annotated schema.
 
 ### Smart plugs (Hubspace / Home Depot)
 
-Phase 1 supports manual power control for Hubspace power outlets. Plugs are
+lanctl supports manual power control for Hubspace power outlets. Plugs are
 first-class: a plug may power no managed host (for example a TV), one host, or
 several hosts.
 
